@@ -1,0 +1,10 @@
+DerivedData/
+build/
+work/
+outputs/
+.DS_Store
+*.xcuserstate
+xcuserdata/
+Paihuor/Config/AppConfig.swift
+*.moved-aside
+*.ipa

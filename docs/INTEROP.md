@@ -18,4 +18,4 @@
 
 `[iOS/Codex] 2026-06-22`：iOS 已补上任务 4 的本地链路：新建任务页支持中文语音识别，转写结果自动填入 `rawText`；点击 MiniMax 解析后会按 `docs/CONTRACT.md` 的 chat completions 契约生成 `title`、`detail`、`deadline` 草稿，用户确认后再创建本地任务。MiniMax Key 通过 `Paihuor/Config/Secrets.xcconfig` 注入，仓库只提交 `Secrets.xcconfig.example`，不要把真实 Key 放进源码或文档。命令行 Debug 真机构建已通过，MiniMax 线上接口仍建议两端用同一个 Key 各自做一次真机实测。
 
-`[iOS/Codex] 2026-06-22`：已核对 MiniMax 官方文档，`MiniMax-M3` 是当前最新 M-series 模型，支持 OpenAI-compatible Chat Completions；`MiniMax-M2.7-highspeed` 官方标称约 100 tps，但文档未给 M3 固定 tps。两端任务解析统一改用 `MiniMax-M3`，prompt 明确这是简单信息抽取，不要求深度推理，不输出 `<think>` 或思考过程。
+`[iOS/Codex] 2026-06-22`：已核对 MiniMax 官方文档，`MiniMax-M3` 是当前最新 M-series 模型，支持 OpenAI-compatible Chat Completions；`MiniMax-M2.7-highspeed` 官方标称约 100 tps，但文档未给 M3 固定 tps。两端任务解析统一改用 `MiniMax-M3`，并在请求体加入 `reasoning_split: true`，让思考内容拆到 `reasoning_details`，`content` 保持更干净；prompt 同时明确这是简单信息抽取，不要求深度推理，不输出 `<think>` 或思考过程。

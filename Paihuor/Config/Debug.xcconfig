@@ -1,0 +1,5 @@
+MINIMAX_API_KEY =
+MINIMAX_MODEL = MiniMax-M2.7-highspeed
+MINIMAX_ENDPOINT = https:/$()/api.minimaxi.com/v1/chat/completions
+
+#include? "Secrets.xcconfig"

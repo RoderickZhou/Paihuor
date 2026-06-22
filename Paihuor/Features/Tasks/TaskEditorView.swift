@@ -5,12 +5,14 @@ struct TaskEditorView: View {
     @EnvironmentObject private var profileStore: ProfileStore
     @EnvironmentObject private var taskStore: TaskStore
 
+    @StateObject private var speechRecognizer = SpeechRecognizerService()
     @State private var rawText = ""
     @State private var title = ""
     @State private var detail = ""
     @State private var hasDeadline = true
     @State private var deadline = Date().addingTimeInterval(3600)
     @State private var toUserId: UserRole = .husband
+    @State private var parseState: MiniMaxParseState = .idle
 
     private var canSave: Bool {
         !normalizedTitle.isEmpty || !normalizedRawText.isEmpty
@@ -27,9 +29,87 @@ struct TaskEditorView: View {
     var body: some View {
         NavigationStack {
             Form {
+                Section("语音") {
+                    HStack {
+                        Label(
+                            speechRecognizer.isRecording ? "正在听你说话" : "未开始录音",
+                            systemImage: speechRecognizer.isRecording ? "waveform.circle.fill" : "mic.circle"
+                        )
+                        .foregroundStyle(speechRecognizer.isRecording ? Color.paiPrimary : Color.paiTextSecondary)
+
+                        Spacer()
+
+                        Button {
+                            if speechRecognizer.isRecording {
+                                speechRecognizer.stopRecording()
+                            } else {
+                                Task {
+                                    await speechRecognizer.startRecording()
+                                }
+                            }
+                        } label: {
+                            Label(
+                                speechRecognizer.isRecording ? "停止" : "录音",
+                                systemImage: speechRecognizer.isRecording ? "stop.fill" : "mic.fill"
+                            )
+                        }
+                    }
+
+                    if !speechRecognizer.transcript.isEmpty {
+                        Text(speechRecognizer.transcript)
+                            .foregroundStyle(Color.paiTextSecondary)
+                    }
+
+                    if let errorMessage = speechRecognizer.errorMessage {
+                        Text(errorMessage)
+                            .foregroundStyle(.red)
+                    }
+
+                    Button {
+                        speechRecognizer.resetTranscript()
+                    } label: {
+                        Label("清空语音文字", systemImage: "trash")
+                    }
+                    .disabled(speechRecognizer.transcript.isEmpty)
+                }
+
                 Section("原话") {
                     TextField("例如：今晚八点前把垃圾带下去", text: $rawText, axis: .vertical)
                         .lineLimit(2...4)
+                }
+
+                Section("MiniMax 解析") {
+                    Button {
+                        parseWithMiniMax()
+                    } label: {
+                        HStack {
+                            if parseState.isParsing {
+                                ProgressView()
+                            }
+                            Label("解析成任务草稿", systemImage: "sparkles")
+                        }
+                    }
+                    .disabled(!AppConfig.hasMiniMaxAPIKey || normalizedRawText.isEmpty || parseState.isParsing)
+
+                    switch parseState {
+                    case .idle:
+                        if AppConfig.hasMiniMaxAPIKey {
+                            Text("先录音或输入原话，再解析。")
+                                .foregroundStyle(Color.paiTextSecondary)
+                        } else {
+                            Text("MiniMax Key 未配置。")
+                                .foregroundStyle(.red)
+                        }
+                    case .parsing:
+                        Text("正在解析任务标题、细节和截止时间。")
+                            .foregroundStyle(Color.paiTextSecondary)
+                    case .parsed:
+                        Text("已生成草稿，请检查下面内容后发送。")
+                            .foregroundStyle(Color.paiPrimary)
+                    case .failed(let message):
+                        Text(message)
+                            .foregroundStyle(.red)
+                    }
                 }
 
                 Section("审核") {
@@ -75,6 +155,41 @@ struct TaskEditorView: View {
                     toUserId = profile.counterpartUserId
                 }
             }
+            .onChange(of: speechRecognizer.transcript) { newValue in
+                guard !newValue.isEmpty else { return }
+                rawText = newValue
+            }
+            .onDisappear {
+                speechRecognizer.stopRecording()
+            }
+        }
+    }
+
+    private func parseWithMiniMax() {
+        let input = normalizedRawText
+        guard !input.isEmpty else { return }
+
+        parseState = .parsing
+
+        Task {
+            do {
+                let draft = try await MiniMaxTaskParser().parse(rawText: input)
+                await MainActor.run {
+                    title = draft.title
+                    detail = draft.detail
+                    if draft.hasDeadline {
+                        hasDeadline = true
+                        deadline = Date(epochMilliseconds: draft.deadline)
+                    } else {
+                        hasDeadline = false
+                    }
+                    parseState = .parsed
+                }
+            } catch {
+                await MainActor.run {
+                    parseState = .failed(error.localizedDescription)
+                }
+            }
         }
     }
 
@@ -96,5 +211,20 @@ struct TaskEditorView: View {
         )
 
         dismiss()
+    }
+}
+
+private enum MiniMaxParseState: Equatable {
+    case idle
+    case parsing
+    case parsed
+    case failed(String)
+
+    var isParsing: Bool {
+        if case .parsing = self {
+            return true
+        }
+
+        return false
     }
 }

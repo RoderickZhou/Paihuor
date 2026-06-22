@@ -53,7 +53,7 @@
 - Endpoint: `POST https://api.minimaxi.com/v1/chat/completions`
 - Header: `Authorization: Bearer <MINIMAX_API_KEY>`，`Content-Type: application/json`
 - Model: `MiniMax-M3`，用于 OpenAI-compatible Chat Completions；解析任务不要求深度推理，prompt 明确禁止输出思考过程
-- Body: `{ "model": <model>, "messages": [system, user], "temperature": 0.2, "max_tokens": 300, "reasoning_split": true }`
+- Body: `{ "model": <model>, "messages": [system, user], "temperature": 0.2, "max_tokens": 300, "thinking": { "type": "disabled" } }`
 - Result: `choices[0].message.content`，内容必须是严格 JSON 字符串
 
 System prompt:

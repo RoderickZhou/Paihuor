@@ -49,7 +49,7 @@ struct MiniMaxTaskParser {
                 ],
                 temperature: 0.2,
                 maxTokens: 300,
-                reasoningSplit: true
+                thinking: ThinkingConfig(type: "disabled")
             )
         )
 
@@ -197,7 +197,7 @@ struct MiniMaxTaskParser {
         let fallbackFormatter = DateFormatter()
         fallbackFormatter.locale = Locale(identifier: "en_US_POSIX")
         fallbackFormatter.timeZone = TimeZone(identifier: "Asia/Shanghai")
-        fallbackFormatter.dateFormat = "yyyy-MM-dd'T'HH:mm:ssXXXXX"
+        fallbackFormatter.timeFormat = "yyyy-MM-dd'T'HH:mm:ssXXXXX"
         return fallbackFormatter.date(from: trimmed)?.epochMilliseconds ?? 0
     }
 }
@@ -207,15 +207,19 @@ private struct ChatCompletionRequest: Encodable {
     let messages: [ChatMessage]
     let temperature: Double
     let maxTokens: Int
-    let reasoningSplit: Bool
+    let thinking: ThinkingConfig
 
     enum CodingKeys: String, CodingKey {
         case model
         case messages
         case temperature
         case maxTokens = "max_tokens"
-        case reasoningSplit = "reasoning_split"
+        case thinking
     }
+}
+
+private struct ThinkingConfig: Encodable {
+    let type: String
 }
 
 private struct ChatMessage: Codable {

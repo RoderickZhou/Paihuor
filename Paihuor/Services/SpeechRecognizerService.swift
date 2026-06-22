@@ -55,7 +55,9 @@ final class SpeechRecognizerService: ObservableObject {
         }
     }
 
-    func stopRecording() {
+    func stopRecording(cancelRecognition: Bool = false) {
+        guard isRecording || audioEngine.isRunning || recognitionRequest != nil else { return }
+
         if audioEngine.isRunning {
             audioEngine.stop()
         }
@@ -66,9 +68,13 @@ final class SpeechRecognizerService: ObservableObject {
         }
 
         recognitionRequest?.endAudio()
-        recognitionTask?.cancel()
-        recognitionRequest = nil
-        recognitionTask = nil
+
+        if cancelRecognition {
+            recognitionTask?.cancel()
+            recognitionTask = nil
+            recognitionRequest = nil
+        }
+
         isRecording = false
 
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
@@ -121,10 +127,28 @@ final class SpeechRecognizerService: ObservableObject {
                 }
 
                 if error != nil || result?.isFinal == true {
-                    self.stopRecording()
+                    self.finishRecognition()
                 }
             }
         }
+    }
+
+    private func finishRecognition() {
+        if audioEngine.isRunning {
+            audioEngine.stop()
+        }
+
+        if hasInstalledTap {
+            audioEngine.inputNode.removeTap(onBus: 0)
+            hasInstalledTap = false
+        }
+
+        recognitionRequest?.endAudio()
+        recognitionRequest = nil
+        recognitionTask = nil
+        isRecording = false
+
+        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
     }
 }
 

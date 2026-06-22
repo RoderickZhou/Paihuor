@@ -7,7 +7,7 @@
 - Swift + SwiftUI
 - 最低 iOS 16.0
 - WidgetKit 小组件保留一个大加号入口
-- M1 离线运行；M2 新建任务页可选择调用 MiniMax 生成任务草稿
+- M1 离线运行；M2 新建任务页长按录音后自动调用 MiniMax 生成任务草稿
 - 本地任务缓存为 App 沙盒 Documents 下的 `paihuor_tasks.json`
 - MiniMax Key 通过 `Paihuor/Config/Secrets.xcconfig` 本地注入，该文件不提交
 
@@ -20,8 +20,8 @@
 - 状态流转：`pending`、`received`、`negotiating`、`done`
 - 商量记录：追加到 `negotiation`
 - Widget 骨架：`paihuor://record` 打开 App 并进入新建任务页
-- 新建任务页：中文语音识别转写，结果自动填入原话
-- MiniMax 解析：从原话生成标题、细节、截止时间，用户审核后再发送
+- 新建任务页：中文语音识别转写，长按录入、松开停止
+- MiniMax 解析：录音完成后自动从原话生成标题、细节、截止时间，用户审核后再发送
 
 ## 待接入
 

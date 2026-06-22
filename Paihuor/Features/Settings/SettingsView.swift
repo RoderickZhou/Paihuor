@@ -64,7 +64,8 @@ struct SettingsView: View {
 
             Section("后续接入") {
                 LabeledContent("LeanCloud", value: "等待 AppId / AppKey / ServerURL")
-                LabeledContent("MiniMax", value: "等待 API Key")
+                LabeledContent("MiniMax", value: AppConfig.hasMiniMaxAPIKey ? "已配置" : "未配置")
+                LabeledContent("模型", value: AppConfig.minimaxModel)
             }
         }
         .navigationTitle("设置")

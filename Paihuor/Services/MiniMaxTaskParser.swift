@@ -48,7 +48,8 @@ struct MiniMaxTaskParser {
                     ChatMessage(role: "user", content: Self.userPrompt(rawText: rawText, now: now))
                 ],
                 temperature: 0.2,
-                maxTokens: 300
+                maxTokens: 300,
+                reasoningSplit: true
             )
         )
 
@@ -206,12 +207,14 @@ private struct ChatCompletionRequest: Encodable {
     let messages: [ChatMessage]
     let temperature: Double
     let maxTokens: Int
+    let reasoningSplit: Bool
 
     enum CodingKeys: String, CodingKey {
         case model
         case messages
         case temperature
         case maxTokens = "max_tokens"
+        case reasoningSplit = "reasoning_split"
     }
 }
 

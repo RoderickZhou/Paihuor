@@ -7,7 +7,7 @@ enum AppConfig {
 
     static var minimaxModel: String {
         let configuredModel = infoValue(for: "MiniMaxModel")
-        return configuredModel.isEmpty ? "MiniMax-M2.7-highspeed" : configuredModel
+        return configuredModel.isEmpty ? "MiniMax-M3" : configuredModel
     }
 
     static var minimaxEndpoint: URL {

@@ -14,4 +14,6 @@
 - `Paihuor/Features/Tasks/`：任务列表、卡片、新建、商量
 - `Paihuor/Features/Settings/`：首次配对与设置
 - `PaihuorWidget/PaihuorWidget.swift`：桌面小组件加号入口
-- `Paihuor/Config/AppConfig.example.swift`：MiniMax 与 LeanCloud 配置占位，真实 `AppConfig.swift` 进 `.gitignore`
+- `Paihuor/Config/AppConfig.swift`：读取 Info.plist 中的 MiniMax 配置；真实 Key 放在本地 `Secrets.xcconfig`，不提交
+
+`[iOS/Codex] 2026-06-22`：iOS 已补上任务 4 的本地链路：新建任务页支持中文语音识别，转写结果自动填入 `rawText`；点击 MiniMax 解析后会按 `docs/CONTRACT.md` 的 chat completions 契约生成 `title`、`detail`、`deadline` 草稿，用户确认后再创建本地任务。MiniMax Key 通过 `Paihuor/Config/Secrets.xcconfig` 注入，仓库只提交 `Secrets.xcconfig.example`，不要把真实 Key 放进源码或文档。命令行 Debug 真机构建已通过，MiniMax 线上接口仍建议两端用同一个 Key 各自做一次真机实测。

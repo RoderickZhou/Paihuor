@@ -26,6 +26,15 @@ export class AsrService {
     return AsrService.instance;
   }
 
+  // 预热：提前创建识别引擎，避免首次"按住说话"加载卡顿
+  async prewarm(): Promise<void> {
+    try {
+      await this.ensureEngine();
+    } catch (err) {
+      hilog.warn(0x0000, TAG, 'prewarm failed: ' + JSON.stringify(err));
+    }
+  }
+
   private async ensureEngine(): Promise<void> {
     if (this.engine) {
       return;

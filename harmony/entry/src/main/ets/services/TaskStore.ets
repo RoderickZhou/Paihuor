@@ -41,6 +41,9 @@ export class TaskStore {
       this.store = await preferences.getPreferences(context, opt);
       const raw = await this.store.get(Constants.PREF_TASKS_KEY, '[]') as string;
       this.tasks = JSON.parse(raw) as TaskItem[];
+      for (let i = 0; i < this.tasks.length; i++) {
+        this.fixTask(this.tasks[i]);
+      }
       hilog.info(0x0000, TAG, 'TaskStore ready, count=' + this.tasks.length);
     } catch (err) {
       hilog.error(0x0000, TAG, 'init failed: ' + JSON.stringify(err));
@@ -83,16 +86,30 @@ export class TaskStore {
         const keepId = this.tasks[idx].id;
         const keepReminders = this.tasks[idx].reminderIds;
         this.tasks[idx] = s;
+        this.fixTask(this.tasks[idx]);
         this.tasks[idx].id = keepId.length > 0 ? keepId : s.objectId;
-        this.tasks[idx].reminderIds = keepReminders;
+        if (Array.isArray(keepReminders)) {
+          this.tasks[idx].reminderIds = keepReminders;
+        }
       } else {
         if (!s.id || s.id.length === 0) {
           s.id = s.objectId;
         }
+        this.fixTask(s);
         this.tasks.push(s);
       }
     }
     await this.persist();
+  }
+
+  // iOS 端不发 reminderIds/negotiation，JSON 里可能缺这些数组字段 → 补成空数组，避免渲染/操作空引用崩溃
+  private fixTask(s: TaskItem): void {
+    if (!Array.isArray(s.reminderIds)) {
+      s.reminderIds = [];
+    }
+    if (!Array.isArray(s.negotiation)) {
+      s.negotiation = [];
+    }
   }
 
   private async persist(): Promise<void> {

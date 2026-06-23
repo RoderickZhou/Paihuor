@@ -1,9 +1,10 @@
 import { AbilityConstant, ConfigurationConstant, UIAbility, Want } from '@kit.AbilityKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { window } from '@kit.ArkUI';
-import { reminderAgentManager } from '@kit.BackgroundTasksKit';
-import { notificationManager } from '@kit.NotificationKit';
+import { pushService } from '@kit.PushKit';
+import { BusinessError } from '@kit.BasicServicesKit';
 import { TaskStore } from '../services/TaskStore';
+import { DeviceService } from '../services/DeviceService';
 
 const DOMAIN = 0x0000;
 
@@ -16,42 +17,32 @@ export default class EntryAbility extends UIAbility {
     }
     // 启动即初始化本地任务存储
     TaskStore.getInstance().init(this.context);
-    this.debugReminders();
+    // 取华为 Push Token 并注册到中继（关闭态收推送的基础）
+    this.initPush();
+    // 点击通知冷启动：参数在 want.parameters
+    if (want.parameters) {
+      hilog.info(DOMAIN, 'PushKit', 'cold start params: %{public}s', JSON.stringify(want.parameters));
+    }
     hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onCreate');
   }
 
-  // 诊断：打印有效提醒数量，并尝试清空
-  private async debugReminders(): Promise<void> {
+  // 取 Push Token 并上报；失败仅记录，不影响启动
+  private async initPush(): Promise<void> {
     try {
-      const before = await reminderAgentManager.getValidReminders();
-      hilog.info(DOMAIN, 'RemDbg', 'validBefore=' + before.length);
-      const notifEnabled = await notificationManager.isNotificationEnabled();
-      hilog.info(DOMAIN, 'RemDbg', 'notifEnabled=' + notifEnabled);
-      try {
-        const all = await reminderAgentManager.getAllValidReminders();
-        hilog.info(DOMAIN, 'RemDbg', 'allValid=' + all.length);
-      } catch (e1) {
-        hilog.error(DOMAIN, 'RemDbg', 'getAll err ' + JSON.stringify(e1));
-      }
-      await reminderAgentManager.cancelAllReminders();
-      const after = await reminderAgentManager.getValidReminders();
-      hilog.info(DOMAIN, 'RemDbg', 'validAfter=' + after.length);
-      const d = new Date(Date.now() + 90000);
-      const req: reminderAgentManager.ReminderRequestCalendar = {
-        reminderType: reminderAgentManager.ReminderType.REMINDER_TYPE_CALENDAR,
-        dateTime: { year: d.getFullYear(), month: d.getMonth() + 1, day: d.getDate(), hour: d.getHours(), minute: d.getMinutes(), second: d.getSeconds() },
-        title: '测试', content: '测试',
-        notificationId: 12321,
-        slotType: notificationManager.SlotType.SOCIAL_COMMUNICATION
-      };
-      try {
-        const id = await reminderAgentManager.publishReminder(req);
-        hilog.info(DOMAIN, 'RemDbg', 'pubOK id=' + id);
-      } catch (e2) {
-        hilog.error(DOMAIN, 'RemDbg', 'pubFAIL ' + JSON.stringify(e2));
-      }
+      const token: string = await pushService.getToken();
+      hilog.info(DOMAIN, 'PushKit', 'pushToken=%{public}s', token);
+      await DeviceService.getInstance().registerToken(token);
     } catch (err) {
-      hilog.error(DOMAIN, 'RemDbg', 'err ' + JSON.stringify(err));
+      const e = err as BusinessError;
+      hilog.error(DOMAIN, 'PushKit', 'getToken fail: %{public}d %{public}s', e.code, e.message);
+      // 1000900010=应用身份校验失败(client_id/指纹/未开通Push/未到生效期)
+    }
+  }
+
+  // 点击通知热启动（launchType=singleton 才可靠触发）
+  onNewWant(want: Want, launchParam: AbilityConstant.LaunchParam): void {
+    if (want.parameters) {
+      hilog.info(DOMAIN, 'PushKit', 'hot start params: %{public}s', JSON.stringify(want.parameters));
     }
   }
 

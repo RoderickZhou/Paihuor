@@ -10,9 +10,10 @@ interface RelayHeader {
   'x-paihuor-key': string;
 }
 
-// 跨设备中继客户端（175 上的 Node 服务，cloudflared 公网）
+// 跨设备中继客户端：优先局域网直连(快)，连不上回退 cloudflared 公网
 export class RelayService {
   private static instance: RelayService;
+  private activeBase: string = '';
 
   static getInstance(): RelayService {
     if (!RelayService.instance) {
@@ -22,47 +23,80 @@ export class RelayService {
   }
 
   enabled(): boolean {
-    return AppConfig.RELAY_BASE_URL.length > 0;
+    return AppConfig.RELAY_BASE_URL.length > 0 || AppConfig.RELAY_LAN_URL.length > 0;
   }
 
   private header(): RelayHeader {
     return { 'Content-Type': 'application/json', 'x-paihuor-key': AppConfig.RELAY_KEY };
   }
 
-  // 建任务：服务端补 objectId/createdAt/updatedAt 后回传完整任务
-  async create(task: TaskItem): Promise<TaskItem | null> {
+  // 供 DeviceService 复用基址选择(局域网优先，回退公网)
+  async resolveBase(): Promise<string> {
+    return this.base();
+  }
+
+  // 选定基址：先探局域网 /health，通就用局域网，否则用公网隧道（结果缓存）
+  private async base(): Promise<string> {
+    if (this.activeBase.length > 0) {
+      return this.activeBase;
+    }
+    let useLan = false;
+    if (AppConfig.RELAY_LAN_URL.length > 0) {
+      useLan = await this.ping(AppConfig.RELAY_LAN_URL);
+    }
+    this.activeBase = useLan ? AppConfig.RELAY_LAN_URL : AppConfig.RELAY_BASE_URL;
+    hilog.info(0x0000, TAG, 'activeBase=' + this.activeBase);
+    return this.activeBase;
+  }
+
+  private async ping(b: string): Promise<boolean> {
     const c = http.createHttp();
     try {
-      const resp = await c.request(AppConfig.RELAY_BASE_URL + '/tasks', {
-        method: http.RequestMethod.POST,
-        header: this.header(),
-        extraData: JSON.stringify(task),
-        connectTimeout: 15000,
-        readTimeout: 15000
+      const r = await c.request(b + '/health', {
+        method: http.RequestMethod.GET, header: this.header(),
+        connectTimeout: 2500, readTimeout: 2500
+      });
+      return r.responseCode === 200;
+    } catch (e) {
+      return false;
+    } finally {
+      c.destroy();
+    }
+  }
+
+  private resetBase(): void {
+    this.activeBase = '';
+  }
+
+  async create(task: TaskItem): Promise<TaskItem | null> {
+    const b = await this.base();
+    const c = http.createHttp();
+    try {
+      const resp = await c.request(b + '/tasks', {
+        method: http.RequestMethod.POST, header: this.header(),
+        extraData: JSON.stringify(task), connectTimeout: 10000, readTimeout: 10000
       });
       if (resp.responseCode !== 200) {
-        hilog.error(0x0000, TAG, 'create http ' + resp.responseCode);
         return null;
       }
       return JSON.parse(resp.result as string) as TaskItem;
     } catch (err) {
       hilog.error(0x0000, TAG, 'create: ' + JSON.stringify(err));
+      this.resetBase();
       return null;
     } finally {
       c.destroy();
     }
   }
 
-  // 轮询：拉取本家庭 updatedAt 在 since 之后的任务
   async list(familyId: string, since: number): Promise<TaskItem[]> {
+    const b = await this.base();
     const c = http.createHttp();
     try {
-      const u = AppConfig.RELAY_BASE_URL + '/tasks?familyId=' + encodeURIComponent(familyId) + '&since=' + since;
+      const u = b + '/tasks?familyId=' + encodeURIComponent(familyId) + '&since=' + since;
       const resp = await c.request(u, {
-        method: http.RequestMethod.GET,
-        header: this.header(),
-        connectTimeout: 15000,
-        readTimeout: 15000
+        method: http.RequestMethod.GET, header: this.header(),
+        connectTimeout: 8000, readTimeout: 8000
       });
       if (resp.responseCode !== 200) {
         return [];
@@ -70,26 +104,25 @@ export class RelayService {
       return JSON.parse(resp.result as string) as TaskItem[];
     } catch (err) {
       hilog.error(0x0000, TAG, 'list: ' + JSON.stringify(err));
+      this.resetBase();
       return [];
     } finally {
       c.destroy();
     }
   }
 
-  // 改状态/加商量：POST /tasks/:objectId （ArkTS 不支持 PATCH，故用 POST）
   async update(objectId: string, patch: Record<string, Object>): Promise<boolean> {
+    const b = await this.base();
     const c = http.createHttp();
     try {
-      const resp = await c.request(AppConfig.RELAY_BASE_URL + '/tasks/' + objectId, {
-        method: http.RequestMethod.POST,
-        header: this.header(),
-        extraData: JSON.stringify(patch),
-        connectTimeout: 15000,
-        readTimeout: 15000
+      const resp = await c.request(b + '/tasks/' + objectId, {
+        method: http.RequestMethod.POST, header: this.header(),
+        extraData: JSON.stringify(patch), connectTimeout: 10000, readTimeout: 10000
       });
       return resp.responseCode === 200;
     } catch (err) {
       hilog.error(0x0000, TAG, 'update: ' + JSON.stringify(err));
+      this.resetBase();
       return false;
     } finally {
       c.destroy();

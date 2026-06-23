@@ -28,9 +28,16 @@
         }
       }
     ],
+    "metadata": [
+      {
+        "name": "client_id",
+        "value": "6917609043044899438"
+      }
+    ],
     "abilities": [
       {
         "name": "EntryAbility",
+        "launchType": "singleton",
         "srcEntry": "./ets/entryability/EntryAbility.ets",
         "description": "$string:EntryAbility_desc",
         "icon": "$media:layered_image",

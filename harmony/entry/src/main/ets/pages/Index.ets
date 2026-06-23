@@ -27,6 +27,7 @@ struct Index {
     await TaskStore.getInstance().whenReady();
     this.refresh();
     this.startPolling();
+    AsrService.getInstance().prewarm();
   }
 
   aboutToDisappear(): void {
@@ -39,7 +40,7 @@ struct Index {
 
   startPolling(): void {
     this.poll();
-    this.pollTimer = setInterval(() => { this.poll(); }, 4000);
+    this.pollTimer = setInterval(() => { this.poll(); }, 3000);
   }
 
   stopPolling(): void {
@@ -111,7 +112,7 @@ struct Index {
               ListItem() {
                 this.TaskCard(item)
               }
-            }, (item: TaskItem) => item.id)
+            }, (item: TaskItem) => item.id + '-' + item.status + '-' + item.deadline + '-' + item.updatedAt + '-' + item.receivedAt + '-' + item.doneAt)
           }
           .width('100%')
           .layoutWeight(1)
@@ -378,23 +379,27 @@ struct Index {
   async onReceive(item: TaskItem): Promise<void> {
     item.status = TaskStatus.RECEIVED;
     item.receivedAt = Date.now();
+    // 收到要立即生效并同步，不被提醒排期拖累
+    await TaskStore.getInstance().upsert(item);
+    await this.pushStatus(item);
+    this.refresh();
+    this.toast('已收到');
+    // 排提醒：能排就排，排不上(配额/权限)也静默，不影响"收到"
     if (item.deadline > Date.now()) {
       try {
         const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
         await ReminderService.getInstance().requestNotify(ctx);
         const titleForRing = item.title.length > 0 ? item.title : item.rawText;
-        item.reminderIds = await ReminderService.getInstance().scheduleForTask(
+        const ids = await ReminderService.getInstance().scheduleForTask(
           titleForRing, item.deadline, item.reminder.intervalMinutes, item.reminder.rampUpLastMinutes, item.id);
-        this.toast('已收到，提醒已排 ' + item.reminderIds.length + ' 次');
+        if (ids.length > 0) {
+          item.reminderIds = ids;
+          await TaskStore.getInstance().upsert(item);
+        }
       } catch (err) {
-        const m = err instanceof Error ? err.message : JSON.stringify(err);
-        this.recordError = '排提醒失败：' + m;
-        this.toast('排提醒失败：' + m);
+        // 提醒排期失败(配额/权限)不影响收到，静默
       }
     }
-    await TaskStore.getInstance().upsert(item);
-    await this.pushStatus(item);
-    this.refresh();
   }
 
   async onNegotiate(item: TaskItem): Promise<void> {

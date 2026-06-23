@@ -1,0 +1,12 @@
+[Unit]
+Description=Paihuor cloudflared quick tunnel
+After=network.target paihuor-relay.service
+
+[Service]
+ExecStart=/usr/local/bin/cloudflared tunnel --no-autoupdate --url http://localhost:8787
+Restart=always
+RestartSec=5
+User=zx
+
+[Install]
+WantedBy=multi-user.target

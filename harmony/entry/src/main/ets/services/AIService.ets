@@ -99,43 +99,57 @@ export class AIService {
       'Authorization': 'Bearer ' + AppConfig.MINIMAX_API_KEY
     };
 
-    const response = await this.httpClient.request(AppConfig.MINIMAX_URL, {
-      method: http.RequestMethod.POST,
-      header: header,
-      extraData: JSON.stringify(body),
-      connectTimeout: 30000,
-      readTimeout: 30000
-    });
-
-    if (response.responseCode !== 200) {
-      throw new Error('MiniMax HTTP ' + response.responseCode);
+    // 失败(超时/网络抖动)自动重试一次
+    let lastErr: string = '';
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        return await this.callOnce(body, header, text);
+      } catch (err) {
+        lastErr = err instanceof Error ? err.message : JSON.stringify(err);
+        hilog.warn(0x0000, TAG, 'extract attempt ' + attempt + ' failed: ' + lastErr);
+      }
     }
+    throw new Error(lastErr);
+  }
 
-    const parsed: ChatResponse = JSON.parse(response.result as string) as ChatResponse;
-    if (!parsed.choices || parsed.choices.length === 0) {
-      throw new Error('MiniMax 无返回内容');
+  private async callOnce(body: ChatRequestBody, header: RequestHeader, text: string): Promise<ExtractResult> {
+    const client = http.createHttp();
+    try {
+      const response = await client.request(AppConfig.MINIMAX_URL, {
+        method: http.RequestMethod.POST,
+        header: header,
+        extraData: JSON.stringify(body),
+        connectTimeout: 20000,
+        readTimeout: 20000
+      });
+      if (response.responseCode !== 200) {
+        throw new Error('MiniMax HTTP ' + response.responseCode);
+      }
+      const parsed: ChatResponse = JSON.parse(response.result as string) as ChatResponse;
+      if (!parsed.choices || parsed.choices.length === 0) {
+        throw new Error('MiniMax 无返回内容');
+      }
+      // 思考型模型会带 <think>…</think>，先剥掉再取 JSON
+      let content = parsed.choices[0].message.content;
+      content = AIService.stripThink(content);
+      const jsonStr = AIService.sliceJson(content);
+      const raw: ExtractRaw = JSON.parse(jsonStr) as ExtractRaw;
+      let deadlineMs = 0;
+      if (raw.hasDeadline && raw.deadlineISO && raw.deadlineISO.length > 0) {
+        const t = Date.parse(raw.deadlineISO);
+        deadlineMs = isNaN(t) ? 0 : t;
+      }
+      const result: ExtractResult = {
+        title: raw.title ? raw.title : text,
+        detail: raw.detail ? raw.detail : '',
+        hasDeadline: raw.hasDeadline === true,
+        deadline: deadlineMs
+      };
+      hilog.info(0x0000, TAG, 'extract ok: ' + JSON.stringify(result));
+      return result;
+    } finally {
+      client.destroy();
     }
-
-    // M2.7-highspeed 是思考型模型：先剥掉 <think>…</think>，再取 JSON
-    let content = parsed.choices[0].message.content;
-    content = AIService.stripThink(content);
-    const jsonStr = AIService.sliceJson(content);
-
-    const raw: ExtractRaw = JSON.parse(jsonStr) as ExtractRaw;
-    let deadlineMs = 0;
-    if (raw.hasDeadline && raw.deadlineISO && raw.deadlineISO.length > 0) {
-      const t = Date.parse(raw.deadlineISO);
-      deadlineMs = isNaN(t) ? 0 : t;
-    }
-
-    const result: ExtractResult = {
-      title: raw.title ? raw.title : text,
-      detail: raw.detail ? raw.detail : '',
-      hasDeadline: raw.hasDeadline === true,
-      deadline: deadlineMs
-    };
-    hilog.info(0x0000, TAG, 'extract ok: ' + JSON.stringify(result));
-    return result;
   }
 
   // 去掉 <think>…</think> 思考段

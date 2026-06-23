@@ -5,6 +5,8 @@ import { TaskStore } from '../services/TaskStore';
 import { AsrService } from '../services/AsrService';
 import { AIService } from '../services/AIService';
 import { ReminderService } from '../services/ReminderService';
+import { RelayService } from '../services/RelayService';
+import { AppConfig } from '../config/AppConfig';
 
 @Entry
 @Component
@@ -18,14 +20,66 @@ struct Index {
   @State asrText: string = '';
   @State extracting: boolean = false;
   @State recordError: string = '';
+  private lastSync: number = 0;
+  private pollTimer: number = -1;
 
   async aboutToAppear(): Promise<void> {
     await TaskStore.getInstance().whenReady();
     this.refresh();
+    this.startPolling();
+  }
+
+  aboutToDisappear(): void {
+    this.stopPolling();
   }
 
   refresh(): void {
     this.tasks = TaskStore.getInstance().getAll();
+  }
+
+  startPolling(): void {
+    this.poll();
+    this.pollTimer = setInterval(() => { this.poll(); }, 4000);
+  }
+
+  stopPolling(): void {
+    if (this.pollTimer >= 0) {
+      clearInterval(this.pollTimer);
+      this.pollTimer = -1;
+    }
+  }
+
+  // 轮询中继，把对方建/改的任务合并到本地
+  async poll(): Promise<void> {
+    if (!RelayService.getInstance().enabled()) {
+      return;
+    }
+    const remote = await RelayService.getInstance().list(AppConfig.FAMILY_ID, this.lastSync);
+    if (remote.length === 0) {
+      return;
+    }
+    let mx = this.lastSync;
+    for (let i = 0; i < remote.length; i++) {
+      if (remote[i].updatedAt > mx) {
+        mx = remote[i].updatedAt;
+      }
+    }
+    this.lastSync = mx;
+    await TaskStore.getInstance().mergeRemote(remote);
+    this.refresh();
+  }
+
+  // 把本机的状态变更推到中继（供对方同步）
+  private async pushStatus(item: TaskItem): Promise<void> {
+    if (item.objectId.length === 0) {
+      return;
+    }
+    const patch: Record<string, Object> = {
+      'status': item.status,
+      'receivedAt': item.receivedAt,
+      'doneAt': item.doneAt
+    };
+    await RelayService.getInstance().update(item.objectId, patch);
   }
 
   build() {
@@ -295,8 +349,9 @@ struct Index {
     }
     const t = new TaskItem();
     t.id = '' + Date.now() + '_' + Math.floor(Math.random() * 100000);
-    t.fromUserId = 'me';
-    t.toUserId = 'other';
+    t.familyId = AppConfig.FAMILY_ID;
+    t.fromUserId = AppConfig.MY_USER_ID;
+    t.toUserId = AppConfig.OTHER_USER_ID;
     t.rawText = this.asrText.trim().length > 0 ? this.asrText.trim() : this.draftTitle.trim();
     t.title = this.draftTitle.trim();
     t.detail = this.draftDetail;
@@ -304,10 +359,20 @@ struct Index {
     t.status = TaskStatus.PENDING;
     t.reminder = new ReminderConfig();
     t.createdAt = Date.now();
+    // 先存本地（离线也能用）
     await TaskStore.getInstance().upsert(t);
     this.showCreate = false;
     this.refresh();
-    this.toast('已发出');
+    // 推送到中继做跨设备投递
+    const saved = await RelayService.getInstance().create(t);
+    if (saved !== null && saved.objectId.length > 0) {
+      t.objectId = saved.objectId;
+      await TaskStore.getInstance().upsert(t);
+      this.refresh();
+      this.toast('已发出');
+    } else {
+      this.toast('已存本地（中继未连上）');
+    }
   }
 
   async onReceive(item: TaskItem): Promise<void> {
@@ -328,12 +393,14 @@ struct Index {
       }
     }
     await TaskStore.getInstance().upsert(item);
+    await this.pushStatus(item);
     this.refresh();
   }
 
   async onNegotiate(item: TaskItem): Promise<void> {
     item.status = TaskStatus.NEGOTIATING;
     await TaskStore.getInstance().upsert(item);
+    await this.pushStatus(item);
     this.refresh();
     this.toast('商量流程在 M5 接入');
   }
@@ -344,6 +411,7 @@ struct Index {
     item.status = TaskStatus.DONE;
     item.doneAt = Date.now();
     await TaskStore.getInstance().upsert(item);
+    await this.pushStatus(item);
     this.refresh();
   }
 

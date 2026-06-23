@@ -71,6 +71,30 @@ export class TaskStore {
     await this.persist();
   }
 
+  // 用中继返回的任务合并进本地（按 objectId 去重；保留本地 id 与 reminderIds）
+  async mergeRemote(remote: TaskItem[]): Promise<void> {
+    for (let i = 0; i < remote.length; i++) {
+      const s = remote[i];
+      if (!s.objectId || s.objectId.length === 0) {
+        continue;
+      }
+      const idx = this.tasks.findIndex((t: TaskItem) => t.objectId === s.objectId);
+      if (idx >= 0) {
+        const keepId = this.tasks[idx].id;
+        const keepReminders = this.tasks[idx].reminderIds;
+        this.tasks[idx] = s;
+        this.tasks[idx].id = keepId.length > 0 ? keepId : s.objectId;
+        this.tasks[idx].reminderIds = keepReminders;
+      } else {
+        if (!s.id || s.id.length === 0) {
+          s.id = s.objectId;
+        }
+        this.tasks.push(s);
+      }
+    }
+    await this.persist();
+  }
+
   private async persist(): Promise<void> {
     if (!this.store) {
       return;

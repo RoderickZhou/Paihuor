@@ -25,6 +25,8 @@ export class NegotiationMsg {
 // 一条待办
 export class TaskItem {
   id: string = '';
+  objectId: string = '';            // 中继分配的服务端主键（跨设备唯一）
+  familyId: string = '';            // 家庭配对码
   fromUserId: string = '';
   toUserId: string = '';
   rawText: string = '';             // 语音/输入原文
@@ -36,6 +38,7 @@ export class TaskItem {
   negotiation: NegotiationMsg[] = [];
   reminderIds: number[] = [];       // 本地排定的提醒 id（仅本机，不参与云端同步）
   createdAt: number = 0;
+  updatedAt: number = 0;            // 中继维护，用于增量轮询
   receivedAt: number = 0;
   doneAt: number = 0;
 }

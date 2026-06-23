@@ -1,0 +1,16 @@
+[Unit]
+Description=Paihuor relay (Node)
+After=network.target
+
+[Service]
+# 真实密钥只在服务器上设置；仓库里用占位（部署时改成你的密钥）
+Environment=PAIHUOR_KEY=CHANGE_ME
+Environment=PORT=8787
+WorkingDirectory=/home/zx/paihuor-relay
+ExecStart=/usr/bin/node /home/zx/paihuor-relay/server.js
+Restart=always
+RestartSec=3
+User=zx
+
+[Install]
+WantedBy=multi-user.target

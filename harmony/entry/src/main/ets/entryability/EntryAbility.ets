@@ -25,6 +25,8 @@ export default class EntryAbility extends UIAbility {
     try {
       const before = await reminderAgentManager.getValidReminders();
       hilog.info(DOMAIN, 'RemDbg', 'validBefore=' + before.length);
+      const notifEnabled = await notificationManager.isNotificationEnabled();
+      hilog.info(DOMAIN, 'RemDbg', 'notifEnabled=' + notifEnabled);
       try {
         const all = await reminderAgentManager.getAllValidReminders();
         hilog.info(DOMAIN, 'RemDbg', 'allValid=' + all.length);

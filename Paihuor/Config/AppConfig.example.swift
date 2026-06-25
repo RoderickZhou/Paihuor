@@ -1,7 +1,4 @@
-enum AppConfig {
-    static let minimaxApiKey = "<填>"
-    static let minimaxModel = "MiniMax-M2.7-highspeed"
-    static let leanCloudAppId = "<填>"
-    static let leanCloudAppKey = "<填>"
-    static let leanCloudServerURL = "<填>"
-}
+// Real runtime config lives in AppConfig.swift and reads values from Info.plist.
+// Put local secrets in Secrets.xcconfig instead of hard-coding them in Swift:
+//
+// MINIMAX_API_KEY = <your MiniMax key>

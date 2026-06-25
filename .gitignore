@@ -5,6 +5,6 @@ outputs/
 .DS_Store
 *.xcuserstate
 xcuserdata/
-Paihuor/Config/AppConfig.swift
+Paihuor/Config/Secrets.xcconfig
 *.moved-aside
 *.ipa

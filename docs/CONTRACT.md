@@ -52,8 +52,8 @@
 
 - Endpoint: `POST https://api.minimaxi.com/v1/chat/completions`
 - Header: `Authorization: Bearer <MINIMAX_API_KEY>`，`Content-Type: application/json`
-- Model: `MiniMax-M2.7-highspeed`，待在 MiniMax 控制台最终核对
-- Body: `{ "model": <model>, "messages": [system, user], "temperature": 0.2, "max_tokens": 300 }`
+- Model: `MiniMax-M3`，用于 OpenAI-compatible Chat Completions；解析任务不要求深度推理，prompt 明确禁止输出思考过程
+- Body: `{ "model": <model>, "messages": [system, user], "temperature": 0.2, "max_tokens": 300, "thinking": { "type": "disabled" } }`
 - Result: `choices[0].message.content`，内容必须是严格 JSON 字符串
 
 System prompt:
@@ -62,6 +62,7 @@ System prompt:
 你是"派活儿"App 的待办解析助手。用户会口述/输入一件要交代对方做的事。
 只输出一个严格的 JSON 对象，不要任何多余文字、不要 markdown 代码块：
 {"title":"一句话动作标题(不超过15字)","detail":"补充细节，没有则空字符串","hasDeadline":true或false,"deadlineISO":"ISO8601带时区的截止时间，如 2026-06-21T20:00:00+08:00；无截止则空字符串"}
+这是简单的信息抽取任务，不需要深度推理。不要输出 <think>、思考过程、解释、注释或前后缀。
 解析规则：
 - 基于用户消息里给出的"当前时间"解析相对时间。
 - "今晚X点"=当天X:00；"明早/明天X点"=次日X:00；"X小时后/X分钟后"=当前时间加对应时长；"下班前"约当天18:00；没提到时间则 hasDeadline=false。

@@ -37,6 +37,8 @@ export class TaskItem {
   reminder: ReminderConfig = new ReminderConfig();
   negotiation: NegotiationMsg[] = [];
   reminderIds: number[] = [];       // 本地排定的提醒 id（仅本机，不参与云端同步）
+  archived: boolean = false;        // 已归档（完成即自动归档，跨端同步）
+  deleted: boolean = false;         // 软删墓碑标志（来自中继；本地见到即移除该任务）
   createdAt: number = 0;
   updatedAt: number = 0;            // 中继维护，用于增量轮询
   receivedAt: number = 0;

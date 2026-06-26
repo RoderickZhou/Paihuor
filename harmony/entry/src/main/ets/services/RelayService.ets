@@ -93,7 +93,8 @@ export class RelayService {
     const b = await this.base();
     const c = http.createHttp();
     try {
-      const u = b + '/tasks?familyId=' + encodeURIComponent(familyId) + '&since=' + since;
+      // caps=v2 声明本端能处理 已归档/软删墓碑 行（老端不带，中继只给活跃未删行）
+      const u = b + '/tasks?familyId=' + encodeURIComponent(familyId) + '&since=' + since + '&caps=v2';
       const resp = await c.request(u, {
         method: http.RequestMethod.GET, header: this.header(),
         connectTimeout: 8000, readTimeout: 8000
@@ -122,6 +123,25 @@ export class RelayService {
       return resp.responseCode === 200;
     } catch (err) {
       hilog.error(0x0000, TAG, 'update: ' + JSON.stringify(err));
+      this.resetBase();
+      return false;
+    } finally {
+      c.destroy();
+    }
+  }
+
+  // 删除任务：中继做软删（置 deleted=1 并刷新 updatedAt），对端轮询到墓碑后本地移除
+  async remove(objectId: string): Promise<boolean> {
+    const b = await this.base();
+    const c = http.createHttp();
+    try {
+      const resp = await c.request(b + '/tasks/' + objectId, {
+        method: http.RequestMethod.DELETE, header: this.header(),
+        connectTimeout: 10000, readTimeout: 10000
+      });
+      return resp.responseCode === 200;
+    } catch (err) {
+      hilog.error(0x0000, TAG, 'remove: ' + JSON.stringify(err));
       this.resetBase();
       return false;
     } finally {

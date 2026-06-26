@@ -29,6 +29,17 @@ struct Index {
   @State negText: string = '';
   @State negProposedDeadline: number = 0;
   @State negProposedCode: number = 0;
+  // 归档区
+  @State showArchive: boolean = false;
+  @State archivedTasks: TaskItem[] = [];
+  @State archivedCount: number = 0;
+  @State doneUnarchivedCount: number = 0;
+  // 编辑弹窗（仅新建方）
+  @State showEdit: boolean = false;
+  @State editTaskId: string = '';
+  @State editTitle: string = '';
+  @State editDetail: string = '';
+  @State editDeadline: number = 0;
   private lastSync: number = 0;
   private pollTimer: number = -1;
 
@@ -44,7 +55,20 @@ struct Index {
   }
 
   refresh(): void {
-    this.tasks = TaskStore.getInstance().getAll();
+    const store = TaskStore.getInstance();
+    this.tasks = store.getActive();
+    const arch = store.getArchived();
+    this.archivedCount = arch.length;
+    let doneU = 0;
+    for (let i = 0; i < this.tasks.length; i++) {
+      if (this.tasks[i].status === TaskStatus.DONE && !this.tasks[i].archived) {
+        doneU++;
+      }
+    }
+    this.doneUnarchivedCount = doneU;
+    if (this.showArchive) {
+      this.archivedTasks = arch;
+    }
   }
 
   startPolling(): void {
@@ -76,7 +100,11 @@ struct Index {
       }
     }
     this.lastSync = mx;
-    await TaskStore.getInstance().mergeRemote(remote);
+    const orphan = await TaskStore.getInstance().mergeRemote(remote);
+    // 远端删除的任务，撤掉本机为它排的提醒
+    if (orphan.length > 0) {
+      await ReminderService.getInstance().cancelForTask(orphan);
+    }
     this.refresh();
     // 商量弹窗开着时，把对方刚发来的商量记录也同步进来
     if (this.showNegotiate) {
@@ -100,16 +128,28 @@ struct Index {
   build() {
     Stack({ alignContent: Alignment.BottomEnd }) {
       Column() {
-        // 顶部标题
+        // 顶部标题 + 归档入口
         Row() {
           Text('派活儿')
             .fontSize(24)
             .fontWeight(FontWeight.Bold)
             .fontColor(Constants.COLOR_TEXT_PRIMARY)
           Blank()
+          if (this.doneUnarchivedCount > 0) {
+            Text('归档已完成')
+              .fontSize(13).fontColor(Constants.COLOR_PRIMARY)
+              .padding({ left: 8, right: 8, top: 4, bottom: 4 })
+              .margin({ right: 8 })
+              .onClick(() => { this.onArchiveAllDone(); })
+          }
+          Text('归档 ' + this.archivedCount)
+            .fontSize(13).fontColor(Constants.COLOR_TEXT_SECONDARY)
+            .padding({ left: 10, right: 10, top: 5, bottom: 5 })
+            .backgroundColor(Constants.COLOR_CARD_BG).borderRadius(8)
+            .onClick(() => { this.openArchive(); })
         }
         .width('100%')
-        .padding({ left: 20, right: 20, top: 16, bottom: 8 })
+        .padding({ left: 20, right: 16, top: 16, bottom: 8 })
 
         if (this.tasks.length === 0) {
           Column() {
@@ -126,7 +166,7 @@ struct Index {
               ListItem() {
                 this.TaskCard(item)
               }
-            }, (item: TaskItem) => item.id + '-' + item.status + '-' + item.deadline + '-' + item.updatedAt + '-' + item.receivedAt + '-' + item.doneAt + '-' + item.negotiation.length)
+            }, (item: TaskItem) => item.id + '-' + item.status + '-' + item.deadline + '-' + item.updatedAt + '-' + item.receivedAt + '-' + item.doneAt + '-' + item.negotiation.length + '-' + item.archived + '-' + item.title)
           }
           .width('100%')
           .layoutWeight(1)
@@ -158,6 +198,14 @@ struct Index {
 
       if (this.showNegotiate) {
         this.NegotiationSheet()
+      }
+
+      if (this.showEdit) {
+        this.EditSheet()
+      }
+
+      if (this.showArchive) {
+        this.ArchiveSheet()
       }
     }
     .width('100%')
@@ -200,38 +248,7 @@ struct Index {
         this.NegPreview(item)
       }
 
-      Row() {
-        if (item.status === TaskStatus.PENDING) {
-          Button('收到')
-            .type(ButtonType.Normal).fontSize(14).fontColor(Color.White)
-            .backgroundColor(Constants.COLOR_PRIMARY).height(36).borderRadius(10)
-            .padding({ left: 16, right: 16 }).margin({ right: 10 })
-            .onClick(() => { this.onReceive(item); })
-          this.NegBtn(item)
-        } else if (item.status === TaskStatus.RECEIVED) {
-          Button('勾掉完成')
-            .type(ButtonType.Normal).fontSize(14).fontColor(Color.White)
-            .backgroundColor(Constants.COLOR_PRIMARY).height(36).borderRadius(10)
-            .padding({ left: 16, right: 16 }).margin({ right: 10 })
-            .onClick(() => { this.onDone(item); })
-          this.NegBtn(item)
-        } else if (item.status === TaskStatus.NEGOTIATING) {
-          Button('改为收到')
-            .type(ButtonType.Normal).fontSize(14).fontColor(Color.White)
-            .backgroundColor(Constants.COLOR_PRIMARY).height(36).borderRadius(10)
-            .padding({ left: 16, right: 16 }).margin({ right: 10 })
-            .onClick(() => { this.onReceive(item); })
-          this.NegBtn(item)
-        }
-        Blank()
-        Text('删除')
-          .fontSize(13)
-          .fontColor(Constants.COLOR_TEXT_SECONDARY)
-          .padding(6)
-          .onClick(() => { this.onDelete(item); })
-      }
-      .width('100%')
-      .margin({ top: 12 })
+      this.ActionRow(item)
     }
     .width('100%')
     .padding(16)
@@ -500,6 +517,176 @@ struct Index {
       .onClick(() => { this.setProposed(code); })
   }
 
+  // 卡片动作区：按 归档/状态/角色(新建方 vs 接收方) 决定显示哪些按钮
+  @Builder
+  ActionRow(item: TaskItem) {
+    Row() {
+      if (item.archived) {
+        Button('取消归档')
+          .type(ButtonType.Normal).fontSize(14).fontColor(Constants.COLOR_TEXT_PRIMARY)
+          .backgroundColor(Constants.COLOR_BG).height(36).borderRadius(10)
+          .padding({ left: 16, right: 16 }).margin({ right: 10 })
+          .onClick(() => { this.onUnarchive(item); })
+      } else if (item.status === TaskStatus.DONE) {
+        Button('归档')
+          .type(ButtonType.Normal).fontSize(14).fontColor(Color.White)
+          .backgroundColor(Constants.COLOR_PRIMARY).height(36).borderRadius(10)
+          .padding({ left: 16, right: 16 }).margin({ right: 10 })
+          .onClick(() => { this.onArchive(item); })
+      } else if (this.isReceiver(item)) {
+        if (item.status === TaskStatus.PENDING) {
+          Button('收到')
+            .type(ButtonType.Normal).fontSize(14).fontColor(Color.White)
+            .backgroundColor(Constants.COLOR_PRIMARY).height(36).borderRadius(10)
+            .padding({ left: 16, right: 16 }).margin({ right: 10 })
+            .onClick(() => { this.onReceive(item); })
+          this.NegBtn(item)
+        } else if (item.status === TaskStatus.RECEIVED) {
+          Button('勾掉完成')
+            .type(ButtonType.Normal).fontSize(14).fontColor(Color.White)
+            .backgroundColor(Constants.COLOR_PRIMARY).height(36).borderRadius(10)
+            .padding({ left: 16, right: 16 }).margin({ right: 10 })
+            .onClick(() => { this.onDone(item); })
+          this.NegBtn(item)
+        } else if (item.status === TaskStatus.NEGOTIATING) {
+          Button('改为收到')
+            .type(ButtonType.Normal).fontSize(14).fontColor(Color.White)
+            .backgroundColor(Constants.COLOR_PRIMARY).height(36).borderRadius(10)
+            .padding({ left: 16, right: 16 }).margin({ right: 10 })
+            .onClick(() => { this.onReceive(item); })
+          this.NegBtn(item)
+        }
+      } else if (this.isCreator(item)) {
+        // 新建方（fromUserId==我）：编辑 + 商量
+        Button('编辑')
+          .type(ButtonType.Normal).fontSize(14).fontColor(Constants.COLOR_PRIMARY)
+          .backgroundColor(Constants.COLOR_BG).height(36).borderRadius(10)
+          .borderWidth(1).borderColor(Constants.COLOR_PRIMARY)
+          .padding({ left: 16, right: 16 }).margin({ right: 10 })
+          .onClick(() => { this.openEdit(item); })
+        this.NegBtn(item)
+      }
+      Blank()
+      // 删除：仅新建方可删（软删，会同步移除对端）
+      if (this.isCreator(item)) {
+        this.DeleteBtn(item)
+      }
+    }
+    .width('100%')
+    .margin({ top: 12 })
+  }
+
+  @Builder
+  DeleteBtn(item: TaskItem) {
+    Text('删除')
+      .fontSize(13)
+      .fontColor(Constants.COLOR_DANGER)
+      .padding(6)
+      .onClick(() => { this.onDelete(item); })
+  }
+
+  @Builder
+  EditSheet() {
+    Column() {
+      Column().layoutWeight(1).width('100%')
+
+      Column() {
+        Text('编辑任务')
+          .fontSize(18).fontWeight(FontWeight.Bold)
+          .fontColor(Constants.COLOR_TEXT_PRIMARY).margin({ bottom: 16 })
+
+        Text('事项').fontSize(14).fontColor(Constants.COLOR_TEXT_SECONDARY)
+          .width('100%').margin({ bottom: 8 })
+        TextInput({ text: this.editTitle, placeholder: '任务标题' })
+          .height(48).backgroundColor(Constants.COLOR_BG).borderRadius(10)
+          .onChange((v: string) => { this.editTitle = v; })
+
+        Text('细节').fontSize(14).fontColor(Constants.COLOR_TEXT_SECONDARY)
+          .width('100%').margin({ top: 14, bottom: 8 })
+        TextInput({ text: this.editDetail, placeholder: '补充细节（可空）' })
+          .height(48).backgroundColor(Constants.COLOR_BG).borderRadius(10)
+          .onChange((v: string) => { this.editDetail = v; })
+
+        Text('截止时间').fontSize(14).fontColor(Constants.COLOR_TEXT_SECONDARY)
+          .width('100%').margin({ top: 14, bottom: 8 })
+        Row() {
+          this.EditTimeChip('2分钟后', 2)
+          this.EditTimeChip('1小时后', 60)
+          this.EditTimeChip('今晚20点', -1)
+          this.EditTimeChip('清除', 0)
+        }
+        .width('100%').justifyContent(FlexAlign.SpaceBetween)
+        Text(this.editDeadline > 0 ? ('截止：' + Constants.formatDeadline(this.editDeadline)) : '未设时间')
+          .fontSize(13)
+          .fontColor(this.editDeadline > 0 ? Constants.COLOR_PRIMARY : Constants.COLOR_TEXT_SECONDARY)
+          .width('100%').margin({ top: 10 })
+
+        Row() {
+          Button('取消')
+            .type(ButtonType.Normal).fontColor(Constants.COLOR_TEXT_SECONDARY)
+            .backgroundColor(Constants.COLOR_BG).layoutWeight(1).height(46)
+            .borderRadius(10).margin({ right: 10 })
+            .onClick(() => { this.closeEdit(); })
+          Button('保存')
+            .type(ButtonType.Normal).fontColor(Color.White)
+            .backgroundColor(Constants.COLOR_PRIMARY).layoutWeight(1).height(46)
+            .borderRadius(10)
+            .onClick(() => { this.onSaveEdit(); })
+        }
+        .width('100%').margin({ top: 20 })
+      }
+      .width('100%').padding(20)
+      .backgroundColor(Constants.COLOR_CARD_BG)
+      .borderRadius({ topLeft: 18, topRight: 18 })
+    }
+    .width('100%').height('100%')
+    .backgroundColor('#66000000')
+  }
+
+  @Builder
+  EditTimeChip(label: string, code: number) {
+    Button(label)
+      .type(ButtonType.Normal).fontSize(12).fontColor(Constants.COLOR_TEXT_PRIMARY)
+      .backgroundColor(Constants.COLOR_BG).height(38).borderRadius(10).layoutWeight(1)
+      .margin({ right: code === 0 ? 0 : 6 })
+      .onClick(() => { this.setEditDeadline(code); })
+  }
+
+  @Builder
+  ArchiveSheet() {
+    Column() {
+      Row() {
+        Text('已归档')
+          .fontSize(20).fontWeight(FontWeight.Bold).fontColor(Constants.COLOR_TEXT_PRIMARY)
+        Blank()
+        Text('关闭').fontSize(15).fontColor(Constants.COLOR_PRIMARY).padding(6)
+          .onClick(() => { this.closeArchive(); })
+      }
+      .width('100%').padding({ left: 20, right: 16, top: 16, bottom: 8 })
+
+      if (this.archivedTasks.length === 0) {
+        Column() {
+          Text('📦').fontSize(44).margin({ bottom: 10 })
+          Text('还没有归档任务').fontSize(15).fontColor(Constants.COLOR_TEXT_SECONDARY)
+        }
+        .width('100%').layoutWeight(1).justifyContent(FlexAlign.Center)
+      } else {
+        List({ space: 12 }) {
+          ForEach(this.archivedTasks, (item: TaskItem) => {
+            ListItem() {
+              this.TaskCard(item)
+            }
+          }, (item: TaskItem) => 'arc-' + item.id + '-' + item.archived + '-' + item.updatedAt + '-' + item.deadline + '-' + item.title)
+        }
+        .width('100%').layoutWeight(1)
+        .padding({ left: 16, right: 16, top: 4, bottom: 40 })
+        .scrollBar(BarState.Off)
+      }
+    }
+    .width('100%').height('100%')
+    .backgroundColor(Constants.COLOR_BG)
+  }
+
   @Builder
   QuickTime(label: string, code: number) {
     Button(label)
@@ -656,7 +843,14 @@ struct Index {
     await TaskStore.getInstance().upsert(item);
     this.reloadNeg();
     this.refresh();
-    await this.pushNegotiation(item);
+    // 采纳只改时间，不动状态机：patch 只发 deadline + negotiation，避免把对端 status 盖回
+    if (item.objectId.length > 0) {
+      const patch: Record<string, Object> = {
+        'deadline': item.deadline,
+        'negotiation': item.negotiation
+      };
+      await RelayService.getInstance().update(item.objectId, patch);
+    }
     this.toast('已采纳新时间');
   }
 
@@ -688,15 +882,165 @@ struct Index {
     item.reminderIds = [];
     item.status = TaskStatus.DONE;
     item.doneAt = Date.now();
+    item.archived = true;            // 完成即自动归档，主列表保持清爽
     await TaskStore.getInstance().upsert(item);
-    await this.pushStatus(item);
+    if (item.objectId.length > 0) {
+      const patch: Record<string, Object> = {
+        'status': item.status, 'doneAt': item.doneAt, 'archived': true
+      };
+      await RelayService.getInstance().update(item.objectId, patch);
+    }
+    this.refresh();
+    this.toast('已完成并归档');
+  }
+
+  // 删除：仅新建方；二次确认后软删（中继置墓碑→对端轮询移除）
+  onDelete(item: TaskItem): void {
+    const name = item.title.length > 0 ? item.title : item.rawText;
+    AlertDialog.show({
+      title: '删除任务',
+      message: '确定删除「' + name + '」？对方也会同步移除，不可恢复。',
+      primaryButton: {
+        value: '删除', fontColor: Constants.COLOR_DANGER,
+        action: () => { this.doDelete(item); }
+      },
+      secondaryButton: { value: '取消', action: () => {} }
+    });
+  }
+
+  private async doDelete(item: TaskItem): Promise<void> {
+    await ReminderService.getInstance().cancelForTask(item.reminderIds);
+    // 先通知中继软删（对端轮询到墓碑后本地移除），再删本机
+    if (item.objectId.length > 0) {
+      await RelayService.getInstance().remove(item.objectId);
+    }
+    await TaskStore.getInstance().remove(item.id);
+    this.refresh();
+    if (this.showArchive) {
+      this.archivedTasks = TaskStore.getInstance().getArchived();
+    }
+    this.toast('已删除');
+  }
+
+  private isCreator(item: TaskItem): boolean {
+    return item.fromUserId === AppConfig.MY_USER_ID;
+  }
+
+  private isReceiver(item: TaskItem): boolean {
+    return item.toUserId === AppConfig.MY_USER_ID;
+  }
+
+  openArchive(): void {
+    this.archivedTasks = TaskStore.getInstance().getArchived();
+    this.showArchive = true;
+  }
+
+  closeArchive(): void {
+    this.showArchive = false;
+  }
+
+  async onArchive(item: TaskItem): Promise<void> {
+    item.archived = true;
+    await TaskStore.getInstance().upsert(item);
+    if (item.objectId.length > 0) {
+      const patch: Record<string, Object> = { 'archived': true };
+      await RelayService.getInstance().update(item.objectId, patch);
+    }
     this.refresh();
   }
 
-  async onDelete(item: TaskItem): Promise<void> {
-    await ReminderService.getInstance().cancelForTask(item.reminderIds);
-    await TaskStore.getInstance().remove(item.id);
+  async onUnarchive(item: TaskItem): Promise<void> {
+    item.archived = false;
+    await TaskStore.getInstance().upsert(item);
+    if (item.objectId.length > 0) {
+      const patch: Record<string, Object> = { 'archived': false };
+      await RelayService.getInstance().update(item.objectId, patch);
+    }
     this.refresh();
+    this.archivedTasks = TaskStore.getInstance().getArchived();
+  }
+
+  // 一键归档所有"已完成但未归档"（清理历史 done 数据）
+  async onArchiveAllDone(): Promise<void> {
+    const all = TaskStore.getInstance().getActive();
+    let n = 0;
+    for (let i = 0; i < all.length; i++) {
+      const it = all[i];
+      if (it.status === TaskStatus.DONE && !it.archived) {
+        it.archived = true;
+        await TaskStore.getInstance().upsert(it);
+        if (it.objectId.length > 0) {
+          const patch: Record<string, Object> = { 'archived': true };
+          await RelayService.getInstance().update(it.objectId, patch);
+        }
+        n++;
+      }
+    }
+    this.refresh();
+    this.toast(n > 0 ? ('已归档 ' + n + ' 条') : '没有待归档的已完成任务');
+  }
+
+  openEdit(item: TaskItem): void {
+    this.editTaskId = item.id;
+    this.editTitle = item.title;
+    this.editDetail = item.detail;
+    this.editDeadline = item.deadline;
+    this.showEdit = true;
+  }
+
+  closeEdit(): void {
+    this.showEdit = false;
+  }
+
+  setEditDeadline(code: number): void {
+    this.editDeadline = code === 0 ? 0 : Constants.quickDeadline(code);
+  }
+
+  // 保存编辑（仅新建方）：改标题/细节/截止；若已收到且截止变了，重排提醒
+  async onSaveEdit(): Promise<void> {
+    const title = this.editTitle.trim();
+    if (title.length === 0) {
+      this.toast('标题不能为空');
+      return;
+    }
+    const item = TaskStore.getInstance().getById(this.editTaskId);
+    if (!item) {
+      this.showEdit = false;
+      return;
+    }
+    if (!this.isCreator(item)) {
+      this.showEdit = false;
+      this.toast('只有发起方能编辑');
+      return;
+    }
+    const deadlineChanged = item.deadline !== this.editDeadline;
+    item.title = title;
+    item.detail = this.editDetail;
+    item.deadline = this.editDeadline;
+    if (deadlineChanged && item.status === TaskStatus.RECEIVED) {
+      await ReminderService.getInstance().cancelForTask(item.reminderIds);
+      item.reminderIds = [];
+      if (item.deadline > Date.now()) {
+        try {
+          const titleForRing = item.title.length > 0 ? item.title : item.rawText;
+          const ids = await ReminderService.getInstance().scheduleForTask(
+            titleForRing, item.deadline, item.reminder.intervalMinutes, item.reminder.rampUpLastMinutes, item.id);
+          item.reminderIds = ids;
+        } catch (err) {
+          // 重排失败静默
+        }
+      }
+    }
+    await TaskStore.getInstance().upsert(item);
+    if (item.objectId.length > 0) {
+      const patch: Record<string, Object> = {
+        'title': item.title, 'detail': item.detail, 'deadline': item.deadline
+      };
+      await RelayService.getInstance().update(item.objectId, patch);
+    }
+    this.showEdit = false;
+    this.refresh();
+    this.toast('已保存');
   }
 
   async startRecord(): Promise<void> {

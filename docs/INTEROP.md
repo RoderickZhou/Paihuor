@@ -24,3 +24,10 @@
 > 1) **后端实际不是 LeanCloud，而是自建 Node 中继**（`10.1.30.175:8787`，公网经 SakuraFrp TCP 隧道）。REST 接口：`POST /tasks`(建，服务端分配 objectId+createdAt+updatedAt，并对 toUserId 的鸿蒙端发华为 Push)、`POST /tasks/:objectId`(改，`Object.assign` **浅合并** + 刷新 updatedAt)、`GET /tasks?familyId=&since=`(按 familyId 且 updatedAt>since 增量)、`POST /devices`(注册 pushToken)。鉴权 header `x-paihuor-key`。**iOS 若要和鸿蒙互通，需改为对接这套中继 REST（而非 LeanCloud），否则两端不同后端、永远同步不到一起。** 这是目前最大的待对齐项，请周翔拍板（iOS 切中继 / 中继桥接 LeanCloud / 其它）。**iOS 切中继的完整改造规格（含两个会致解析崩溃的必改点：createdAt/updatedAt 用 epoch ms、NegotiationMessage.id 改可选）见 `docs/IOS_RELAY_MIGRATION.md`。**
 > 2) **鸿蒙端「商量」闭环已完成**（之前只是占位）。`negotiation` 走**整段数组覆盖**写回中继（配合 `Object.assign` 浅合并）；每条消息字段 = `{fromUserId, text, proposedDeadline, at}`，**不含 `id`**（iOS 端 `NegotiationMessage` 多的 `id` 鸿蒙解析时忽略，无害）。发一条商量即把 status 置 `negotiating`；对方可「采纳」其建议的 `proposedDeadline` 写回 `deadline`。
 > 3) 鸿蒙端轮询间隔 3s→**8s**（省穿透流量、降中继压力；待办无需秒级实时）。`docs/DEV_GUIDE_HARMONY.md` 为鸿蒙端拉码/签名/真机部署指南。
+
+> `[Harmony/Claude] 2026-06-27 (二)`：中继与鸿蒙端又一批改动，iOS 同步：
+> 1) **中继换 SQLite**（`server/server.js`，Node 内置 `node:sqlite`，无依赖；开机自动迁移旧 `tasks.json`）。新增**任务管理台** `GET /admin`（网页版增查改删，需密钥）。
+> 2) **新增两个任务字段**：`archived`(Bool，**完成即自动归档**) 与 `deleted`(Bool，软删墓碑)。`GET /tasks` 返回**含归档与墓碑行**，客户端据此处理（见 `IOS_RELAY_MIGRATION.md` 字段表）。
+> 3) **新增 `DELETE /tasks/:objectId`**：默认软删(置 deleted 并刷新 updatedAt，让对端传播)，`?hard=1` 物理删。**删除原先只删本地、不同步的 bug 已修。**
+> 4) **权限收口**：仅**新建方**(fromUserId==我)可**编辑/删除**任务；**接收方**只做 收到/完成/商量。iOS 请按同样规则。
+> 5) 后向兼容：旧字段不变，老版本 App 仅忽略新字段（但老版本不识别 deleted/archived，需尽快升级；iOS 改造点见 `IOS_RELAY_MIGRATION.md`）。

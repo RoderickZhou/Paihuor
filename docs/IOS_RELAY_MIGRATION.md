@@ -17,8 +17,9 @@ iOS 若要和鸿蒙互通（含商量），必须改为对接这套**中继 REST
 | --- | --- | --- |
 | GET | `/health` | 返回 `{"ok":true}`，无需 key。用于「LAN 探测优先、否则走公网」。 |
 | POST | `/tasks` | body=完整 task JSON。**服务端**分配 `objectId`(UUID)、`createdAt`、`updatedAt`(epoch ms)，并对 `toUserId` 的**鸿蒙**设备发推送；返回保存后的 task（含 objectId）。 |
-| POST | `/tasks/:objectId` | body=patch 对象。服务端 `Object.assign(task, patch)`**（浅合并）** + 刷新 `updatedAt`；返回更新后的 task。找不到返回 404。 |
-| GET | `/tasks?familyId=<>&since=<ms>` | 返回该 familyId 下 `updatedAt > since` 的 task 数组（增量轮询）。 |
+| POST | `/tasks/:objectId` | body=patch 对象（浅合并）+ 刷新 `updatedAt`；返回更新后的 task。找不到返回 404。可 patch `archived`/`title`/`detail`/`deadline`/`status`/`negotiation` 等。 |
+| DELETE | `/tasks/:objectId` | **软删**：置 `deleted=true` + 刷新 `updatedAt`（这样对端轮询能拿到墓碑并本地移除）。`?hard=1` 为物理删（管理台用）。 |
+| GET | `/tasks?familyId=<>&since=<ms>` | 返回该 familyId 下 `updatedAt > since` 的 task 数组（增量轮询），**含已归档与已软删(墓碑)行**，客户端据 `archived`/`deleted` 自行处理。 |
 | POST | `/devices` | body=`{familyId,userId,platform,pushToken}` 注册推送 token。 |
 
 > ⚠️ **浅合并**：改 `negotiation`/`reminder` 这类数组/对象字段时，patch 里要带**整段**新值（服务端是整字段覆盖，不会数组追加）。
@@ -106,6 +107,10 @@ APNs 是后续工作；先靠前台 8s 轮询。`POST /devices` iOS 可注册(pl
 | status | String | pending/received/negotiating/done |
 | reminder | Object | `{intervalMinutes, rampUpLastMinutes, ringtone}` |
 | negotiation | Array | `{fromUserId, text, proposedDeadline, at}`，**无 id** |
+| archived | Bool | 已归档（**完成即自动归档**：鸿蒙端 onDone 同时置 status=done + archived=true）。主列表只显示未归档，归档区单独看。 |
+| deleted | Bool | 软删墓碑。客户端轮询见到 `deleted=true` 即**本地移除**该任务（并撤销其本地提醒）。默认 false。 |
 | createdAt / updatedAt | Number(ms) | 服务端维护；updatedAt 用于增量轮询 since |
+
+> iOS 需补：① `PaihuorTask` 加 `archived: Bool`（缺省 false）、解码 `deleted`；② 轮询合并时遇 `deleted==true` 的行从本地删除；③ 归档 UI（完成即归档、归档区、取消归档）；④ 删除调 `DELETE /tasks/:objectId`（软删，会同步移除对端）；⑤ 权限：仅新建方(fromUserId==我)可编辑/删除，接收方做执行流。这些与鸿蒙端 2026-06-27 实现一致。
 
 > 注：`CONTRACT.md` 的「LeanCloud Class」「MiniMax model=M2.7」等为早期约定，现以本文件 + `INTEROP.md` 2026-06-27 条为准。

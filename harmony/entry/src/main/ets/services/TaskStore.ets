@@ -55,6 +55,18 @@ export class TaskStore {
     return this.tasks.slice().sort((a: TaskItem, b: TaskItem) => b.createdAt - a.createdAt);
   }
 
+  // 活跃任务（未归档）：主列表用
+  getActive(): TaskItem[] {
+    return this.tasks.filter((t: TaskItem) => !t.archived)
+      .sort((a: TaskItem, b: TaskItem) => b.createdAt - a.createdAt);
+  }
+
+  // 已归档任务：归档区用（最近完成的在前）
+  getArchived(): TaskItem[] {
+    return this.tasks.filter((t: TaskItem) => t.archived)
+      .sort((a: TaskItem, b: TaskItem) => (b.doneAt || b.updatedAt) - (a.doneAt || a.updatedAt));
+  }
+
   getById(id: string): TaskItem | undefined {
     return this.tasks.find((t: TaskItem) => t.id === id);
   }
@@ -74,14 +86,29 @@ export class TaskStore {
     await this.persist();
   }
 
-  // 用中继返回的任务合并进本地（按 objectId 去重；保留本地 id 与 reminderIds）
-  async mergeRemote(remote: TaskItem[]): Promise<void> {
+  // 用中继返回的任务合并进本地（按 objectId 去重；保留本地 id 与 reminderIds）。
+  // 返回因远端删除而需取消的提醒 id（由调用方撤销）。
+  async mergeRemote(remote: TaskItem[]): Promise<number[]> {
+    const orphanReminders: number[] = [];
     for (let i = 0; i < remote.length; i++) {
       const s = remote[i];
       if (!s.objectId || s.objectId.length === 0) {
         continue;
       }
       const idx = this.tasks.findIndex((t: TaskItem) => t.objectId === s.objectId);
+      // 远端软删：本地移除，并回收其提醒 id 交调用方撤销
+      if (s.deleted === true) {
+        if (idx >= 0) {
+          const local = this.tasks[idx];
+          if (Array.isArray(local.reminderIds)) {
+            for (let k = 0; k < local.reminderIds.length; k++) {
+              orphanReminders.push(local.reminderIds[k]);
+            }
+          }
+          this.tasks.splice(idx, 1);
+        }
+        continue;
+      }
       if (idx >= 0) {
         const keepId = this.tasks[idx].id;
         const keepReminders = this.tasks[idx].reminderIds;
@@ -95,20 +122,28 @@ export class TaskStore {
         if (!s.id || s.id.length === 0) {
           s.id = s.objectId;
         }
+        s.reminderIds = []; // 远端带来的是建任务方的本地提醒id，对本机无意义，清空
         this.fixTask(s);
         this.tasks.push(s);
       }
     }
     await this.persist();
+    return orphanReminders;
   }
 
-  // iOS 端不发 reminderIds/negotiation，JSON 里可能缺这些数组字段 → 补成空数组，避免渲染/操作空引用崩溃
+  // 跨端/历史数据可能缺字段 → 补默认值，避免渲染/操作空引用崩溃
   private fixTask(s: TaskItem): void {
     if (!Array.isArray(s.reminderIds)) {
       s.reminderIds = [];
     }
     if (!Array.isArray(s.negotiation)) {
       s.negotiation = [];
+    }
+    if (typeof s.archived !== 'boolean') {
+      s.archived = false;
+    }
+    if (typeof s.deleted !== 'boolean') {
+      s.deleted = false;
     }
   }
 

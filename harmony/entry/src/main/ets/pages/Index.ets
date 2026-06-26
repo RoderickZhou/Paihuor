@@ -1,6 +1,6 @@
 import { abilityAccessCtrl, common, Permissions } from '@kit.AbilityKit';
 import { Constants } from '../constants/Constants';
-import { TaskItem, TaskStatus, ReminderConfig } from '../models/TaskModels';
+import { TaskItem, TaskStatus, ReminderConfig, NegotiationMsg } from '../models/TaskModels';
 import { TaskStore } from '../services/TaskStore';
 import { AsrService } from '../services/AsrService';
 import { AIService } from '../services/AIService';
@@ -20,6 +20,15 @@ struct Index {
   @State asrText: string = '';
   @State extracting: boolean = false;
   @State recordError: string = '';
+  // 商量弹窗状态
+  @State showNegotiate: boolean = false;
+  @State negTaskId: string = '';
+  @State negTaskTitle: string = '';
+  @State negMsgs: NegotiationMsg[] = [];
+  @State negDeadlineShown: number = 0;
+  @State negText: string = '';
+  @State negProposedDeadline: number = 0;
+  @State negProposedCode: number = 0;
   private lastSync: number = 0;
   private pollTimer: number = -1;
 
@@ -40,7 +49,8 @@ struct Index {
 
   startPolling(): void {
     this.poll();
-    this.pollTimer = setInterval(() => { this.poll(); }, 3000);
+    // 8s 轮询：待办不需要秒级实时，省流量(免费穿透档)并降中继压力
+    this.pollTimer = setInterval(() => { this.poll(); }, 8000);
   }
 
   stopPolling(): void {
@@ -68,6 +78,10 @@ struct Index {
     this.lastSync = mx;
     await TaskStore.getInstance().mergeRemote(remote);
     this.refresh();
+    // 商量弹窗开着时，把对方刚发来的商量记录也同步进来
+    if (this.showNegotiate) {
+      this.reloadNeg();
+    }
   }
 
   // 把本机的状态变更推到中继（供对方同步）
@@ -112,7 +126,7 @@ struct Index {
               ListItem() {
                 this.TaskCard(item)
               }
-            }, (item: TaskItem) => item.id + '-' + item.status + '-' + item.deadline + '-' + item.updatedAt + '-' + item.receivedAt + '-' + item.doneAt)
+            }, (item: TaskItem) => item.id + '-' + item.status + '-' + item.deadline + '-' + item.updatedAt + '-' + item.receivedAt + '-' + item.doneAt + '-' + item.negotiation.length)
           }
           .width('100%')
           .layoutWeight(1)
@@ -140,6 +154,10 @@ struct Index {
 
       if (this.showCreate) {
         this.CreateSheet()
+      }
+
+      if (this.showNegotiate) {
+        this.NegotiationSheet()
       }
     }
     .width('100%')
@@ -178,6 +196,10 @@ struct Index {
           .width('100%')
       }
 
+      if (item.negotiation.length > 0) {
+        this.NegPreview(item)
+      }
+
       Row() {
         if (item.status === TaskStatus.PENDING) {
           Button('收到')
@@ -185,23 +207,21 @@ struct Index {
             .backgroundColor(Constants.COLOR_PRIMARY).height(36).borderRadius(10)
             .padding({ left: 16, right: 16 }).margin({ right: 10 })
             .onClick(() => { this.onReceive(item); })
-          Button('商量')
-            .type(ButtonType.Normal).fontSize(14).fontColor(Color.White)
-            .backgroundColor(Constants.COLOR_WARNING).height(36).borderRadius(10)
-            .padding({ left: 16, right: 16 })
-            .onClick(() => { this.onNegotiate(item); })
+          this.NegBtn(item)
         } else if (item.status === TaskStatus.RECEIVED) {
           Button('勾掉完成')
             .type(ButtonType.Normal).fontSize(14).fontColor(Color.White)
             .backgroundColor(Constants.COLOR_PRIMARY).height(36).borderRadius(10)
-            .padding({ left: 16, right: 16 })
+            .padding({ left: 16, right: 16 }).margin({ right: 10 })
             .onClick(() => { this.onDone(item); })
+          this.NegBtn(item)
         } else if (item.status === TaskStatus.NEGOTIATING) {
           Button('改为收到')
             .type(ButtonType.Normal).fontSize(14).fontColor(Color.White)
             .backgroundColor(Constants.COLOR_PRIMARY).height(36).borderRadius(10)
-            .padding({ left: 16, right: 16 })
+            .padding({ left: 16, right: 16 }).margin({ right: 10 })
             .onClick(() => { this.onReceive(item); })
+          this.NegBtn(item)
         }
         Blank()
         Text('删除')
@@ -319,6 +339,168 @@ struct Index {
   }
 
   @Builder
+  NegBtn(item: TaskItem) {
+    Button('商量')
+      .type(ButtonType.Normal).fontSize(14).fontColor(Constants.COLOR_WARNING)
+      .backgroundColor(Constants.COLOR_BG).height(36).borderRadius(10)
+      .borderWidth(1).borderColor(Constants.COLOR_WARNING)
+      .padding({ left: 16, right: 16 })
+      .onClick(() => { this.openNegotiate(item); })
+  }
+
+  @Builder
+  NegPreview(item: TaskItem) {
+    Column() {
+      Text('商量记录 · ' + item.negotiation.length + ' 条')
+        .fontSize(12).fontColor(Constants.COLOR_TEXT_SECONDARY).width('100%')
+      Text(this.displayName(item.negotiation[item.negotiation.length - 1].fromUserId) + '：'
+        + item.negotiation[item.negotiation.length - 1].text)
+        .fontSize(13).fontColor(Constants.COLOR_TEXT_PRIMARY).width('100%').margin({ top: 2 })
+      if (item.negotiation[item.negotiation.length - 1].proposedDeadline > 0) {
+        Text('建议改到 ' + Constants.formatDeadline(item.negotiation[item.negotiation.length - 1].proposedDeadline))
+          .fontSize(12).fontColor(Constants.COLOR_PRIMARY).width('100%').margin({ top: 2 })
+      }
+    }
+    .width('100%').padding(10).margin({ top: 10 })
+    .backgroundColor(Constants.COLOR_BG).borderRadius(10)
+    .alignItems(HorizontalAlign.Start)
+  }
+
+  @Builder
+  NegotiationSheet() {
+    Column() {
+      Column().layoutWeight(1).width('100%')
+
+      Column() {
+        Row() {
+          Text('商量一下')
+            .fontSize(18).fontWeight(FontWeight.Bold)
+            .fontColor(Constants.COLOR_TEXT_PRIMARY)
+          Blank()
+          Text('关闭')
+            .fontSize(14).fontColor(Constants.COLOR_TEXT_SECONDARY).padding(4)
+            .onClick(() => { this.closeNegotiate(); })
+        }
+        .width('100%').margin({ bottom: 12 })
+
+        Text(this.negTaskTitle)
+          .fontSize(16).fontWeight(FontWeight.Medium)
+          .fontColor(Constants.COLOR_TEXT_PRIMARY).width('100%')
+        Text('当前截止：' + Constants.formatDeadline(this.negDeadlineShown))
+          .fontSize(13).fontColor(Constants.COLOR_TEXT_SECONDARY)
+          .width('100%').margin({ top: 4 })
+
+        if (this.negMsgs.length > 0) {
+          List({ space: 8 }) {
+            ForEach(this.negMsgs, (m: NegotiationMsg) => {
+              ListItem() {
+                this.NegMsgItem(m)
+              }
+            }, (m: NegotiationMsg) => m.at + '-' + m.fromUserId + '-' + m.proposedDeadline)
+          }
+          .width('100%')
+          .constraintSize({ maxHeight: 200 })
+          .margin({ top: 12 })
+          .scrollBar(BarState.Off)
+        } else {
+          Text('还没有商量记录，先说一句吧')
+            .fontSize(13).fontColor(Constants.COLOR_TEXT_SECONDARY)
+            .width('100%').margin({ top: 12 })
+        }
+
+        TextInput({ text: this.negText, placeholder: '比如：能不能改到明早九点？' })
+          .height(48).backgroundColor(Constants.COLOR_BG).borderRadius(10)
+          .margin({ top: 12 })
+          .onChange((v: string) => { this.negText = v; })
+
+        Text('想改时间？')
+          .fontSize(14).fontColor(Constants.COLOR_TEXT_SECONDARY)
+          .width('100%').margin({ top: 14, bottom: 8 })
+        Row() {
+          this.NegTimeChip('1小时后', 60)
+          this.NegTimeChip('今晚20点', -1)
+          this.NegTimeChip('明早9点', -2)
+          this.NegTimeChip('不改', 0)
+        }
+        .width('100%').justifyContent(FlexAlign.SpaceBetween)
+
+        if (this.negProposedDeadline > 0) {
+          Text('建议改到：' + Constants.formatDeadline(this.negProposedDeadline))
+            .fontSize(13).fontColor(Constants.COLOR_PRIMARY)
+            .width('100%').margin({ top: 10 })
+        }
+
+        Row() {
+          Button('取消')
+            .type(ButtonType.Normal).fontColor(Constants.COLOR_TEXT_SECONDARY)
+            .backgroundColor(Constants.COLOR_BG).layoutWeight(1).height(46)
+            .borderRadius(10).margin({ right: 10 })
+            .onClick(() => { this.closeNegotiate(); })
+          Button('发送')
+            .type(ButtonType.Normal).fontColor(Color.White)
+            .backgroundColor(this.negText.trim().length > 0 ? Constants.COLOR_PRIMARY : Constants.COLOR_PRIMARY_LIGHT)
+            .layoutWeight(1).height(46).borderRadius(10)
+            .enabled(this.negText.trim().length > 0)
+            .onClick(() => { this.onSendNeg(); })
+        }
+        .width('100%').margin({ top: 20 })
+      }
+      .width('100%').padding(20)
+      .backgroundColor(Constants.COLOR_CARD_BG)
+      .borderRadius({ topLeft: 18, topRight: 18 })
+    }
+    .width('100%').height('100%')
+    .backgroundColor('#66000000')
+  }
+
+  @Builder
+  NegMsgItem(m: NegotiationMsg) {
+    Column() {
+      Row() {
+        Text(this.displayName(m.fromUserId))
+          .fontSize(13).fontWeight(FontWeight.Medium)
+          .fontColor(m.fromUserId === AppConfig.MY_USER_ID ? Constants.COLOR_PRIMARY_DARK : Constants.COLOR_TEXT_PRIMARY)
+        Blank()
+        Text(Constants.formatDeadline(m.at))
+          .fontSize(11).fontColor(Constants.COLOR_TEXT_SECONDARY)
+      }
+      .width('100%')
+      Text(m.text)
+        .fontSize(14).fontColor(Constants.COLOR_TEXT_PRIMARY)
+        .width('100%').margin({ top: 4 })
+      if (m.proposedDeadline > 0) {
+        Row() {
+          Text('建议改到 ' + Constants.formatDeadline(m.proposedDeadline))
+            .fontSize(12).fontColor(Constants.COLOR_PRIMARY).layoutWeight(1)
+          if (m.fromUserId !== AppConfig.MY_USER_ID && m.proposedDeadline !== this.negDeadlineShown) {
+            Button('采纳')
+              .type(ButtonType.Normal).fontSize(12).fontColor(Color.White)
+              .backgroundColor(Constants.COLOR_PRIMARY).height(30).borderRadius(8)
+              .padding({ left: 12, right: 12 })
+              .onClick(() => { this.onAcceptProposed(m); })
+          }
+        }
+        .width('100%').margin({ top: 6 })
+      }
+    }
+    .width('100%').padding(10)
+    .backgroundColor(Constants.COLOR_CARD_BG).borderRadius(10)
+    .border({ width: 1, color: Constants.COLOR_BG })
+    .alignItems(HorizontalAlign.Start)
+  }
+
+  @Builder
+  NegTimeChip(label: string, code: number) {
+    Button(label)
+      .type(ButtonType.Normal).fontSize(12)
+      .fontColor(this.negProposedCode === code ? Color.White : Constants.COLOR_TEXT_PRIMARY)
+      .backgroundColor(this.negProposedCode === code ? Constants.COLOR_PRIMARY : Constants.COLOR_BG)
+      .height(38).borderRadius(10).layoutWeight(1)
+      .margin({ right: code === 0 ? 0 : 6 })
+      .onClick(() => { this.setProposed(code); })
+  }
+
+  @Builder
   QuickTime(label: string, code: number) {
     Button(label)
       .type(ButtonType.Normal)
@@ -402,12 +584,103 @@ struct Index {
     }
   }
 
-  async onNegotiate(item: TaskItem): Promise<void> {
+  openNegotiate(item: TaskItem): void {
+    this.negTaskId = item.id;
+    this.negTaskTitle = item.title.length > 0 ? item.title : item.rawText;
+    this.negMsgs = item.negotiation.slice();
+    this.negDeadlineShown = item.deadline;
+    this.negText = '';
+    this.negProposedDeadline = 0;
+    this.negProposedCode = 0;
+    this.showNegotiate = true;
+  }
+
+  closeNegotiate(): void {
+    this.showNegotiate = false;
+  }
+
+  // 从本地存储重新载入当前商量任务（本机追加或对方轮询同步后刷新弹窗）
+  private reloadNeg(): void {
+    const item = TaskStore.getInstance().getById(this.negTaskId);
+    if (!item) {
+      return;
+    }
+    this.negMsgs = item.negotiation.slice();
+    this.negDeadlineShown = item.deadline;
+  }
+
+  setProposed(code: number): void {
+    this.negProposedCode = code;
+    this.negProposedDeadline = code === 0 ? 0 : Constants.quickDeadline(code);
+  }
+
+  // 发一条商量：追加到 negotiation、置为商量中、撤掉旧提醒、同步中继
+  async onSendNeg(): Promise<void> {
+    const text = this.negText.trim();
+    if (text.length === 0) {
+      this.toast('说点什么吧');
+      return;
+    }
+    const item = TaskStore.getInstance().getById(this.negTaskId);
+    if (!item) {
+      return;
+    }
+    const msg = new NegotiationMsg();
+    msg.fromUserId = AppConfig.MY_USER_ID;
+    msg.text = text;
+    msg.proposedDeadline = this.negProposedDeadline;
+    msg.at = Date.now();
+    item.negotiation.push(msg);
+    // 进入商量态：原有提醒可能因时间要变而过期，先撤掉，待重新「收到」再排
+    if (item.status === TaskStatus.RECEIVED && item.reminderIds.length > 0) {
+      await ReminderService.getInstance().cancelForTask(item.reminderIds);
+      item.reminderIds = [];
+    }
     item.status = TaskStatus.NEGOTIATING;
     await TaskStore.getInstance().upsert(item);
-    await this.pushStatus(item);
+    this.negText = '';
+    this.negProposedDeadline = 0;
+    this.negProposedCode = 0;
+    this.reloadNeg();
     this.refresh();
-    this.toast('商量流程在 M5 接入');
+    await this.pushNegotiation(item);
+  }
+
+  // 采纳对方建议的新截止时间
+  async onAcceptProposed(m: NegotiationMsg): Promise<void> {
+    const item = TaskStore.getInstance().getById(this.negTaskId);
+    if (!item || m.proposedDeadline <= 0) {
+      return;
+    }
+    item.deadline = m.proposedDeadline;
+    await TaskStore.getInstance().upsert(item);
+    this.reloadNeg();
+    this.refresh();
+    await this.pushNegotiation(item);
+    this.toast('已采纳新时间');
+  }
+
+  // 把商量记录/状态/截止时间整体推到中继（数组整段覆盖，两人量级足够）
+  private async pushNegotiation(item: TaskItem): Promise<void> {
+    if (item.objectId.length === 0) {
+      return;
+    }
+    const patch: Record<string, Object> = {
+      'status': item.status,
+      'deadline': item.deadline,
+      'negotiation': item.negotiation
+    };
+    await RelayService.getInstance().update(item.objectId, patch);
+  }
+
+  private displayName(userId: string): string {
+    if (userId === 'wife') {
+      return '老婆';
+    }
+    if (userId === 'husband') {
+      return '老公';
+    }
+    return userId;
   }
 
   async onDone(item: TaskItem): Promise<void> {

@@ -19,3 +19,8 @@
 > `[Harmony/Claude] 2026-06-22`：鸿蒙端 M1(卡片列表/收到/商量/勾掉) + M2(端侧实时 ASR + 语义抽取 + 四步录入) 已在真机跑通。两点同步给 iOS：
 > 1) **语义抽取改用 `MiniMax-M3` + 请求体顶层 `thinking:{"type":"disabled"}`**。原因：M2.7（整个 M2 系列）**无法关思考**、强制输出 `<think>` 推理，单次抽取实测约 6s 偏慢；M3 关思考后直接返回干净 JSON（无 `<think>`）、token 省约 60%、更快，用同一个 key 即可调通。**建议 iOS 端也切到 M3 + thinking disabled**，保持两端行为与速度一致（system prompt 不变）。若仍用会思考的模型，务必先剥 `<think>…</think>` 再解析、并把 max_tokens 调大（≥1500）。
 > 2) 契约（第 4/5/8 节）我已按现状对齐：`status` 四值全小写、时间 epoch ms、userId = wife/husband。鸿蒙工程稍后并入本仓库 `harmony/`。
+
+> `[Harmony/Claude] 2026-06-27`：三件事同步给 iOS：
+> 1) **后端实际不是 LeanCloud，而是自建 Node 中继**（`10.1.30.175:8787`，公网经 SakuraFrp TCP 隧道）。REST 接口：`POST /tasks`(建，服务端分配 objectId+createdAt+updatedAt，并对 toUserId 的鸿蒙端发华为 Push)、`POST /tasks/:objectId`(改，`Object.assign` **浅合并** + 刷新 updatedAt)、`GET /tasks?familyId=&since=`(按 familyId 且 updatedAt>since 增量)、`POST /devices`(注册 pushToken)。鉴权 header `x-paihuor-key`。**iOS 若要和鸿蒙互通，需改为对接这套中继 REST（而非 LeanCloud），否则两端不同后端、永远同步不到一起。** 这是目前最大的待对齐项，请周翔拍板（iOS 切中继 / 中继桥接 LeanCloud / 其它）。
+> 2) **鸿蒙端「商量」闭环已完成**（之前只是占位）。`negotiation` 走**整段数组覆盖**写回中继（配合 `Object.assign` 浅合并）；每条消息字段 = `{fromUserId, text, proposedDeadline, at}`，**不含 `id`**（iOS 端 `NegotiationMessage` 多的 `id` 鸿蒙解析时忽略，无害）。发一条商量即把 status 置 `negotiating`；对方可「采纳」其建议的 `proposedDeadline` 写回 `deadline`。
+> 3) 鸿蒙端轮询间隔 3s→**8s**（省穿透流量、降中继压力；待办无需秒级实时）。`docs/DEV_GUIDE_HARMONY.md` 为鸿蒙端拉码/签名/真机部署指南。

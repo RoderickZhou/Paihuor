@@ -6,6 +6,7 @@ import { AsrService } from '../services/AsrService';
 import { AIService } from '../services/AIService';
 import { ReminderService } from '../services/ReminderService';
 import { RelayService } from '../services/RelayService';
+import { NotificationService } from '../services/NotificationService';
 import { AppConfig } from '../config/AppConfig';
 
 @Entry
@@ -42,12 +43,20 @@ struct Index {
   @State editDeadline: number = 0;
   private lastSync: number = 0;
   private pollTimer: number = -1;
+  private firstPollDone: boolean = false; // 首轮只建立基线，不弹通知，避免启动刷屏
 
   async aboutToAppear(): Promise<void> {
     await TaskStore.getInstance().whenReady();
     this.refresh();
     this.startPolling();
     AsrService.getInstance().prewarm();
+    // 申请通知权限（角标/横幅需要）
+    try {
+      const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
+      await NotificationService.getInstance().requestEnable(ctx);
+    } catch (err) {
+      // 忽略
+    }
   }
 
   aboutToDisappear(): void {
@@ -60,12 +69,19 @@ struct Index {
     const arch = store.getArchived();
     this.archivedCount = arch.length;
     let doneU = 0;
+    let unread = 0;
     for (let i = 0; i < this.tasks.length; i++) {
-      if (this.tasks[i].status === TaskStatus.DONE && !this.tasks[i].archived) {
+      const t = this.tasks[i];
+      if (t.status === TaskStatus.DONE && !t.archived) {
         doneU++;
+      }
+      // 未读 = 派给我、还没点「收到」的活
+      if (t.toUserId === AppConfig.MY_USER_ID && t.status === TaskStatus.PENDING) {
+        unread++;
       }
     }
     this.doneUnarchivedCount = doneU;
+    NotificationService.getInstance().setBadge(unread); // 桌面图标角标未读数
     if (this.showArchive) {
       this.archivedTasks = arch;
     }
@@ -91,6 +107,7 @@ struct Index {
     }
     const remote = await RelayService.getInstance().list(AppConfig.FAMILY_ID, this.lastSync);
     if (remote.length === 0) {
+      this.firstPollDone = true;
       return;
     }
     let mx = this.lastSync;
@@ -100,12 +117,32 @@ struct Index {
       }
     }
     this.lastSync = mx;
+    // 合并前记录已知 objectId，用来识别"新到的活"
+    const beforeIds: string[] = [];
+    const known = TaskStore.getInstance().getAll();
+    for (let i = 0; i < known.length; i++) {
+      beforeIds.push(known[i].objectId);
+    }
     const orphan = await TaskStore.getInstance().mergeRemote(remote);
     // 远端删除的任务，撤掉本机为它排的提醒
     if (orphan.length > 0) {
       await ReminderService.getInstance().cancelForTask(orphan);
     }
     this.refresh();
+    // 新到的、派给我的、未读(pending)活 → 弹本地通知（首轮只建基线、不弹，避免启动刷屏）
+    if (this.firstPollDone) {
+      const after = TaskStore.getInstance().getAll();
+      for (let i = 0; i < after.length; i++) {
+        const t = after[i];
+        if (beforeIds.indexOf(t.objectId) < 0
+          && t.toUserId === AppConfig.MY_USER_ID
+          && t.status === TaskStatus.PENDING
+          && !t.archived && !t.deleted) {
+          await NotificationService.getInstance().notifyNewTask(this.displayName(t.fromUserId), t.title);
+        }
+      }
+    }
+    this.firstPollDone = true;
     // 商量弹窗开着时，把对方刚发来的商量记录也同步进来
     if (this.showNegotiate) {
       this.reloadNeg();
@@ -212,49 +249,104 @@ struct Index {
     .height('100%')
   }
 
+  // 滴答清单风格卡片：左侧勾选圈 + 标题(完成划线) + 截止(按紧急度变色)
   @Builder
   TaskCard(item: TaskItem) {
-    Column() {
-      Row() {
-        Text(item.title.length > 0 ? item.title : item.rawText)
-          .fontSize(17)
-          .fontWeight(FontWeight.Medium)
-          .fontColor(Constants.COLOR_TEXT_PRIMARY)
-          .layoutWeight(1)
-        Text(this.statusLabel(item.status))
-          .fontSize(12)
-          .fontColor(Color.White)
-          .backgroundColor(this.statusColor(item.status))
-          .borderRadius(8)
-          .padding({ left: 8, right: 8, top: 2, bottom: 2 })
-      }
-      .width('100%')
-
-      Text(Constants.formatDeadline(item.deadline))
-        .fontSize(13)
-        .fontColor(Constants.COLOR_TEXT_SECONDARY)
-        .margin({ top: 6 })
+    Row() {
+      this.CheckCircle(item)
+      Column() {
+        Row() {
+          Text(item.title.length > 0 ? item.title : item.rawText)
+            .fontSize(16)
+            .fontWeight(FontWeight.Medium)
+            .fontColor((item.status === TaskStatus.DONE || item.archived) ? Constants.COLOR_TEXT_SECONDARY : Constants.COLOR_TEXT_PRIMARY)
+            .decoration({ type: (item.status === TaskStatus.DONE || item.archived) ? TextDecorationType.LineThrough : TextDecorationType.None })
+            .maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis })
+            .layoutWeight(1)
+          Text(this.statusLabel(item.status))
+            .fontSize(11)
+            .fontColor(Color.White)
+            .backgroundColor(this.statusColor(item.status))
+            .borderRadius(6)
+            .padding({ left: 7, right: 7, top: 2, bottom: 2 })
+            .margin({ left: 8 })
+        }
         .width('100%')
 
-      if (item.status === TaskStatus.RECEIVED) {
-        Text(Constants.formatRemaining(item.deadline))
-          .fontSize(13)
-          .fontColor(Constants.COLOR_WARNING)
-          .margin({ top: 2 })
-          .width('100%')
-      }
+        if (item.detail.length > 0) {
+          Text(item.detail)
+            .fontSize(13).fontColor(Constants.COLOR_TEXT_SECONDARY)
+            .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
+            .width('100%').margin({ top: 4 })
+        }
 
-      if (item.negotiation.length > 0) {
-        this.NegPreview(item)
-      }
+        Row() {
+          Text('🕑 ' + Constants.formatDeadline(item.deadline)
+            + (item.status === TaskStatus.RECEIVED && item.deadline > 0 ? ('  ' + Constants.formatRemaining(item.deadline)) : ''))
+            .fontSize(12).fontColor(this.deadlineColor(item))
+        }
+        .width('100%').margin({ top: 6 })
 
-      this.ActionRow(item)
+        if (item.negotiation.length > 0) {
+          this.NegPreview(item)
+        }
+
+        this.ActionRow(item)
+      }
+      .layoutWeight(1)
+      .alignItems(HorizontalAlign.Start)
     }
     .width('100%')
-    .padding(16)
+    .padding(14)
     .backgroundColor(Constants.COLOR_CARD_BG)
     .borderRadius(14)
-    .opacity(item.status === TaskStatus.DONE ? 0.5 : 1)
+    .shadow({ radius: 6, color: '#11000000', offsetY: 2 })
+    .alignItems(VerticalAlign.Top)
+    .opacity(item.archived ? 0.7 : 1)
+  }
+
+  // 左侧勾选圈：收到的活点圈即完成；已完成/归档显示绿色对勾
+  @Builder
+  CheckCircle(item: TaskItem) {
+    Stack() {
+      Column()
+        .width(22).height(22).borderRadius(11)
+        .border({ width: 2, color: this.circleColor(item) })
+        .backgroundColor((item.status === TaskStatus.DONE || item.archived) ? Constants.COLOR_PRIMARY : Color.Transparent)
+      if (item.status === TaskStatus.DONE || item.archived) {
+        Text('✓').fontSize(13).fontColor(Color.White)
+      }
+    }
+    .width(22).height(22).margin({ right: 12, top: 2 })
+    .onClick(() => {
+      if (item.status === TaskStatus.RECEIVED && this.isReceiver(item)) {
+        this.onDone(item);
+      }
+    })
+  }
+
+  private circleColor(item: TaskItem): string {
+    if (item.status === TaskStatus.DONE || item.archived || item.status === TaskStatus.RECEIVED) {
+      return Constants.COLOR_PRIMARY;
+    }
+    if (item.status === TaskStatus.NEGOTIATING) {
+      return Constants.COLOR_WARNING;
+    }
+    return Constants.COLOR_TEXT_SECONDARY;
+  }
+
+  private deadlineColor(item: TaskItem): string {
+    if (!item.deadline || item.deadline <= 0 || item.status === TaskStatus.DONE || item.archived) {
+      return Constants.COLOR_TEXT_SECONDARY;
+    }
+    const diff = item.deadline - Date.now();
+    if (diff <= 0) {
+      return Constants.COLOR_DANGER;
+    }
+    if (diff < 3600000) {
+      return Constants.COLOR_WARNING;
+    }
+    return Constants.COLOR_TEXT_SECONDARY;
   }
 
   @Builder

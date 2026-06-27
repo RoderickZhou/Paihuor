@@ -7,6 +7,7 @@ import { AIService } from '../services/AIService';
 import { ReminderService } from '../services/ReminderService';
 import { RelayService } from '../services/RelayService';
 import { NotificationService } from '../services/NotificationService';
+import { updateAllCards } from '../services/WidgetCardData';
 import { AppConfig } from '../config/AppConfig';
 
 @Entry
@@ -82,6 +83,13 @@ struct Index {
     }
     this.doneUnarchivedCount = doneU;
     NotificationService.getInstance().setBadge(unread); // 桌面图标角标未读数
+    // 推送桌面服务卡片更新（App 活着时近实时；无卡片则内部直接返回）
+    try {
+      const ctx = this.getUIContext().getHostContext() as common.Context;
+      updateAllCards(ctx);
+    } catch (err) {
+      // 忽略
+    }
     if (this.showArchive) {
       this.archivedTasks = arch;
     }

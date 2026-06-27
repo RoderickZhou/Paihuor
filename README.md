@@ -11,4 +11,4 @@
 - `PaihuorWidget/`: iOS Widget 小组件
 - `harmony/`: HarmonyOS 原生 ArkTS 工程（DevEco 打开此子目录）
 
-> 注：后端当前是 `10.1.30.175` 上的自建 Node 中继（公网经 SakuraFrp 隧道），**非 LeanCloud**，详见 `docs/INTEROP.md` 2026-06-27 条。
+> 注：后端当前是 `10.1.30.175` 上的自建 Node 中继（公网经 SakuraFrp 隧道），非 LeanCloud，详见 `docs/INTEROP.md` 2026-06-27 条。

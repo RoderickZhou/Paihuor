@@ -6,32 +6,11 @@ struct AppView: View {
     @StateObject private var router = AppRouter()
 
     var body: some View {
-        Group {
-            if profileStore.profile == nil {
-                PairingSetupView()
-            } else {
-                TabView(selection: $router.selectedTab) {
-                    ForEach(AppTab.allCases) { tab in
-                        NavigationStack {
-                            tab.makeContentView()
-                        }
-                        .tabItem { tab.label }
-                        .tag(tab)
-                    }
-                }
-                .environmentObject(router)
-                .sheet(item: $router.presentedSheet) { sheet in
-                    switch sheet {
-                    case .newTask:
-                        TaskEditorView()
-                    case .negotiation(let task):
-                        NegotiationSheet(task: task)
-                    }
-                }
-            }
+        ZStack {
+            Color.paiBackground.ignoresSafeArea()
+            rootContent
         }
         .tint(.paiPrimary)
-        .background(Color.paiBackground)
         .onReceive(deepLinkCenter.$pendingDestination.compactMap { $0 }) { destination in
             guard profileStore.profile != nil else { return }
 
@@ -42,6 +21,26 @@ struct AppView: View {
             }
 
             deepLinkCenter.consume()
+        }
+    }
+
+    @ViewBuilder
+    private var rootContent: some View {
+        if profileStore.profile == nil {
+            PairingSetupView()
+        } else {
+            NavigationStack {
+                TaskListView()
+            }
+            .environmentObject(router)
+            .sheet(item: $router.presentedSheet) { sheet in
+                switch sheet {
+                case .newTask:
+                    TaskEditorView()
+                case .negotiation(let task):
+                    NegotiationSheet(task: task)
+                }
+            }
         }
     }
 }

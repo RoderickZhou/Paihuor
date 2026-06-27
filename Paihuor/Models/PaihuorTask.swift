@@ -39,6 +39,23 @@ struct NegotiationMessage: Codable, Equatable, Identifiable {
         self.proposedDeadline = proposedDeadline
         self.at = at
     }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case fromUserId
+        case text
+        case proposedDeadline
+        case at
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try container.decodeIfPresent(String.self, forKey: .id) ?? UUID().uuidString
+        self.fromUserId = try container.decode(String.self, forKey: .fromUserId)
+        self.text = try container.decode(String.self, forKey: .text)
+        self.proposedDeadline = try container.decodeIfPresent(Int64.self, forKey: .proposedDeadline) ?? 0
+        self.at = try container.decodeIfPresent(Int64.self, forKey: .at) ?? Date().epochMilliseconds
+    }
 }
 
 struct PaihuorTask: Codable, Equatable, Identifiable {
@@ -57,6 +74,12 @@ struct PaihuorTask: Codable, Equatable, Identifiable {
     var negotiation: [NegotiationMessage]
     var receivedAt: Int64
     var doneAt: Int64
+    var archived: Bool
+    var deleted: Bool
+    var archivedAt: Int64?
+    var archivedBy: String?
+    var deletedAt: Int64?
+    var deletedBy: String?
 
     var id: String { objectId }
 
@@ -79,7 +102,13 @@ struct PaihuorTask: Codable, Equatable, Identifiable {
         reminder: TaskReminder = .default,
         negotiation: [NegotiationMessage] = [],
         receivedAt: Int64 = 0,
-        doneAt: Int64 = 0
+        doneAt: Int64 = 0,
+        archived: Bool = false,
+        deleted: Bool = false,
+        archivedAt: Int64? = nil,
+        archivedBy: String? = nil,
+        deletedAt: Int64? = nil,
+        deletedBy: String? = nil
     ) {
         self.objectId = objectId
         self.createdAt = createdAt
@@ -96,5 +125,11 @@ struct PaihuorTask: Codable, Equatable, Identifiable {
         self.negotiation = negotiation
         self.receivedAt = receivedAt
         self.doneAt = doneAt
+        self.archived = archived
+        self.deleted = deleted
+        self.archivedAt = archivedAt
+        self.archivedBy = archivedBy
+        self.deletedAt = deletedAt
+        self.deletedBy = deletedBy
     }
 }

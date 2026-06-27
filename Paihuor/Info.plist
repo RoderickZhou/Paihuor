@@ -35,6 +35,40 @@
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<key>MiniMaxAPIKey</key>
+	<string>$(MINIMAX_API_KEY)</string>
+	<key>MiniMaxEndpoint</key>
+	<string>$(MINIMAX_ENDPOINT)</string>
+	<key>MiniMaxModel</key>
+	<string>$(MINIMAX_MODEL)</string>
+	<key>PaihuorDefaultFamilyId</key>
+	<string>$(PAIHUOR_DEFAULT_FAMILY_ID)</string>
+	<key>PaihuorRelayBaseURL</key>
+	<string>$(PAIHUOR_RELAY_BASE_URL)</string>
+	<key>PaihuorRelayLanURL</key>
+	<string>$(PAIHUOR_RELAY_LAN_URL)</string>
+	<key>PaihuorRelayKey</key>
+	<string>$(PAIHUOR_RELAY_KEY)</string>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+		<key>NSExceptionDomains</key>
+		<dict>
+			<key>10.1.30.175</key>
+			<dict>
+				<key>NSExceptionAllowsInsecureHTTPLoads</key>
+				<true/>
+			</dict>
+			<key>frp-fly.com</key>
+			<dict>
+				<key>NSExceptionAllowsInsecureHTTPLoads</key>
+				<true/>
+				<key>NSIncludesSubdomains</key>
+				<true/>
+			</dict>
+		</dict>
+	</dict>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>派活儿需要使用麦克风，把你的口头交代实时转成文字。</string>
 	<key>NSSpeechRecognitionUsageDescription</key>

@@ -11,6 +11,14 @@ struct NegotiationSheet: View {
     @State private var hasProposedDeadline = false
     @State private var proposedDeadline = Date().addingTimeInterval(1800)
 
+    private var latestNegotiation: NegotiationMessage? {
+        task.negotiation.last
+    }
+
+    private var latestNegotiationIsMine: Bool {
+        latestNegotiation?.fromUserId == profileStore.profile?.userId.rawValue
+    }
+
     var body: some View {
         NavigationStack {
             Form {
@@ -21,8 +29,20 @@ struct NegotiationSheet: View {
                         .foregroundStyle(Color.paiTextSecondary)
                 }
 
-                Section("想法") {
-                    TextField("比如：能不能改到明早九点？", text: $text, axis: .vertical)
+                if let latestNegotiation {
+                    Section(latestNegotiationIsMine ? "我上一条商量" : "对方的商量") {
+                        Text(latestNegotiation.text)
+                            .font(.body)
+
+                        if latestNegotiation.proposedDeadline > 0 {
+                            Label("建议改到 \(PaihuorDateFormatter.friendlyDeadline(latestNegotiation.proposedDeadline))", systemImage: "calendar")
+                                .foregroundStyle(Color.paiTextSecondary)
+                        }
+                    }
+                }
+
+                Section(replySectionTitle) {
+                    TextField(replyPlaceholder, text: $text, axis: .vertical)
                         .lineLimit(3...6)
 
                     Toggle("提出新时间", isOn: $hasProposedDeadline)
@@ -32,7 +52,7 @@ struct NegotiationSheet: View {
                     }
                 }
             }
-            .navigationTitle("商量一下")
+            .navigationTitle(sheetTitle)
             .navigationBarTitleDisplayMode(.inline)
             .scrollContentBackground(.hidden)
             .background(Color.paiBackground)
@@ -51,6 +71,34 @@ struct NegotiationSheet: View {
                 }
             }
         }
+    }
+
+    private var replyPlaceholder: String {
+        guard latestNegotiation != nil else {
+            return "比如：能不能改到明早九点？"
+        }
+
+        if latestNegotiationIsMine {
+            return "比如：我补充一下，最好今晚前。"
+        }
+
+        return "比如：可以，或者我需要改到明早九点。"
+    }
+
+    private var replySectionTitle: String {
+        guard latestNegotiation != nil else {
+            return "想法"
+        }
+
+        return latestNegotiationIsMine ? "补充说明" : "我的回复"
+    }
+
+    private var sheetTitle: String {
+        guard latestNegotiation != nil else {
+            return "商量一下"
+        }
+
+        return latestNegotiationIsMine ? "补充商量" : "回复商量"
     }
 
     private func save() {

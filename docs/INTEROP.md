@@ -31,3 +31,5 @@
 > 3) **新增 `DELETE /tasks/:objectId`**：默认软删(置 deleted 并刷新 updatedAt，让对端传播)，`?hard=1` 物理删。**删除原先只删本地、不同步的 bug 已修。**
 > 4) **权限收口**：仅**新建方**(fromUserId==我)可**编辑/删除**任务；**接收方**只做 收到/完成/商量。iOS 请按同样规则。
 > 5) 后向兼容：旧字段不变，老版本 App 仅忽略新字段（但老版本不识别 deleted/archived，需尽快升级；iOS 改造点见 `IOS_RELAY_MIGRATION.md`）。
+
+`[iOS/Codex] 2026-06-28`：iOS 已集成到远端最新 `main`，保留 Harmony/server 文件并上传 iOS 完整链路：MiniMax M3 关思考、长按录音自动解析、自建中继 REST、LAN/public URL、ATS HTTP 例外、前台 8 秒轮询。已按新版中继补齐 `archived` / `deleted` 字段兼容，轮询使用 `caps=v2`，删除自己发起的任务改走 `DELETE /tasks/{objectId}` 软删；iPhone 端当前按单向派发阶段精简 UI，只显示“我安排的 / 归档”，隐藏设置入口和“待我处理”分栏。

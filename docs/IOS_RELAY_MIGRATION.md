@@ -111,6 +111,6 @@ APNs 是后续工作；先靠前台 8s 轮询。`POST /devices` iOS 可注册(pl
 | deleted | Bool | 软删墓碑。客户端轮询见到 `deleted=true` 即**本地移除**该任务（并撤销其本地提醒）。默认 false。 |
 | createdAt / updatedAt | Number(ms) | 服务端维护；updatedAt 用于增量轮询 since |
 
-> iOS 需补：① `PaihuorTask` 加 `archived: Bool`（缺省 false）、解码 `deleted`；② 轮询合并时遇 `deleted==true` 的行从本地删除；③ 归档 UI（完成即归档、归档区、取消归档）；④ 删除调 `DELETE /tasks/:objectId`（软删，会同步移除对端）；⑤ 权限：仅新建方(fromUserId==我)可编辑/删除，接收方做执行流。这些与鸿蒙端 2026-06-27 实现一致。
+> iOS 2026-06-28 状态：已补 `archived` / `deleted` 解码与发送；轮询已带 `caps=v2`；删除已改调 `DELETE /tasks/:objectId` 软删；仅新建方可删除。当前 iPhone 端按单向派发阶段隐藏接收方分栏，归档区保留。
 
 > 注：`CONTRACT.md` 的「LeanCloud Class」「MiniMax model=M2.7」等为早期约定，现以本文件 + `INTEROP.md` 2026-06-27 条为准。

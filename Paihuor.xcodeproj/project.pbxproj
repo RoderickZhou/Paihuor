@@ -25,6 +25,11 @@
 		200000000000000000000016 /* NegotiationSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000016 /* NegotiationSheet.swift */; };
 		200000000000000000000018 /* PaihuorWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000020 /* PaihuorWidget.swift */; };
 		200000000000000000000019 /* PaihuorWidget.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = 100000000000000000000021 /* PaihuorWidget.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		200000000000000000000020 /* AppConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000027 /* AppConfig.swift */; };
+		200000000000000000000021 /* ParsedTaskDraft.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000028 /* ParsedTaskDraft.swift */; };
+		200000000000000000000022 /* MiniMaxTaskParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000029 /* MiniMaxTaskParser.swift */; };
+		200000000000000000000023 /* SpeechRecognizerService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000030 /* SpeechRecognizerService.swift */; };
+		200000000000000000000024 /* TaskSyncService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000034 /* TaskSyncService.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -78,6 +83,14 @@
 		100000000000000000000024 /* CONTRACT.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = CONTRACT.md; sourceTree = "<group>"; };
 		100000000000000000000025 /* INTEROP.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = INTEROP.md; sourceTree = "<group>"; };
 		100000000000000000000026 /* DEV_GUIDE_IOS.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = DEV_GUIDE_IOS.md; sourceTree = "<group>"; };
+		100000000000000000000027 /* AppConfig.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppConfig.swift; sourceTree = "<group>"; };
+		100000000000000000000028 /* ParsedTaskDraft.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ParsedTaskDraft.swift; sourceTree = "<group>"; };
+		100000000000000000000029 /* MiniMaxTaskParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MiniMaxTaskParser.swift; sourceTree = "<group>"; };
+		100000000000000000000030 /* SpeechRecognizerService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeechRecognizerService.swift; sourceTree = "<group>"; };
+		100000000000000000000031 /* Debug.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Debug.xcconfig; sourceTree = "<group>"; };
+		100000000000000000000032 /* Release.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Release.xcconfig; sourceTree = "<group>"; };
+		100000000000000000000033 /* Secrets.xcconfig.example */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Secrets.xcconfig.example; sourceTree = "<group>"; };
+		100000000000000000000034 /* TaskSyncService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TaskSyncService.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -157,6 +170,7 @@
 			children = (
 				100000000000000000000006 /* FamilyProfile.swift */,
 				100000000000000000000007 /* PaihuorTask.swift */,
+				100000000000000000000028 /* ParsedTaskDraft.swift */,
 			);
 			path = Models;
 			sourceTree = "<group>";
@@ -166,6 +180,9 @@
 			children = (
 				100000000000000000000008 /* ProfileStore.swift */,
 				100000000000000000000009 /* TaskStore.swift */,
+				100000000000000000000034 /* TaskSyncService.swift */,
+				100000000000000000000029 /* MiniMaxTaskParser.swift */,
+				100000000000000000000030 /* SpeechRecognizerService.swift */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -229,7 +246,11 @@
 		400000000000000000000012 /* Config */ = {
 			isa = PBXGroup;
 			children = (
+				100000000000000000000027 /* AppConfig.swift */,
 				100000000000000000000019 /* AppConfig.example.swift */,
+				100000000000000000000031 /* Debug.xcconfig */,
+				100000000000000000000032 /* Release.xcconfig */,
+				100000000000000000000033 /* Secrets.xcconfig.example */,
 			);
 			path = Config;
 			sourceTree = "<group>";
@@ -356,6 +377,11 @@
 				200000000000000000000014 /* TaskCardView.swift in Sources */,
 				200000000000000000000015 /* TaskEditorView.swift in Sources */,
 				200000000000000000000016 /* NegotiationSheet.swift in Sources */,
+				200000000000000000000020 /* AppConfig.swift in Sources */,
+				200000000000000000000021 /* ParsedTaskDraft.swift in Sources */,
+				200000000000000000000022 /* MiniMaxTaskParser.swift in Sources */,
+				200000000000000000000023 /* SpeechRecognizerService.swift in Sources */,
+				200000000000000000000024 /* TaskSyncService.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -380,6 +406,7 @@
 /* Begin XCBuildConfiguration section */
 		500000000000000000000005 /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = 100000000000000000000031 /* Debug.xcconfig */;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				CLANG_ANALYZER_NONNULL = YES;
@@ -441,6 +468,7 @@
 		};
 		500000000000000000000006 /* Release */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = 100000000000000000000032 /* Release.xcconfig */;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				CLANG_ANALYZER_NONNULL = YES;
@@ -495,6 +523,7 @@
 		};
 		500000000000000000000007 /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = 100000000000000000000031 /* Debug.xcconfig */;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
@@ -519,6 +548,7 @@
 		};
 		500000000000000000000008 /* Release */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = 100000000000000000000032 /* Release.xcconfig */;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;

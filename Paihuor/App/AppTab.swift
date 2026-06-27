@@ -2,7 +2,6 @@ import SwiftUI
 
 enum AppTab: String, CaseIterable, Identifiable {
     case tasks
-    case settings
 
     var id: String { rawValue }
 
@@ -11,8 +10,6 @@ enum AppTab: String, CaseIterable, Identifiable {
         switch self {
         case .tasks:
             TaskListView()
-        case .settings:
-            SettingsView()
         }
     }
 
@@ -21,8 +18,6 @@ enum AppTab: String, CaseIterable, Identifiable {
         switch self {
         case .tasks:
             Label("任务", systemImage: "checklist")
-        case .settings:
-            Label("设置", systemImage: "person.2")
         }
     }
 }

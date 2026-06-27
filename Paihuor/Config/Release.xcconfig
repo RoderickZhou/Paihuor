@@ -1,0 +1,9 @@
+MINIMAX_API_KEY =
+MINIMAX_MODEL = MiniMax-M3
+MINIMAX_ENDPOINT = https:/$()/api.minimaxi.com/v1/chat/completions
+PAIHUOR_DEFAULT_FAMILY_ID = fam-zx-001
+PAIHUOR_RELAY_BASE_URL = https:/$()/scanning-nashville-shown-investigation.trycloudflare.com
+PAIHUOR_RELAY_LAN_URL = http:/$()/10.1.30.175:8787
+PAIHUOR_RELAY_KEY =
+
+#include? "Secrets.xcconfig"

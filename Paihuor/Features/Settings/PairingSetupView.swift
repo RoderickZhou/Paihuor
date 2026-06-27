@@ -2,7 +2,7 @@ import SwiftUI
 
 struct PairingSetupView: View {
     @EnvironmentObject private var profileStore: ProfileStore
-    @State private var familyId = ""
+    @State private var familyId = AppConfig.defaultFamilyId
     @State private var userId: UserRole = .wife
     @State private var userName = "老婆"
 

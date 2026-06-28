@@ -31,132 +31,218 @@ struct TaskEditorView: View {
     }
 
     var body: some View {
-        NavigationStack {
-            Form {
-                Section("语音") {
+        VStack(spacing: 0) {
+            dragHandle
+            editorHeader
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 22) {
+                    quickInputArea
+                    parsedDraftArea
+                    scheduleArea
                     holdToRecordButton
-
-                    if !speechRecognizer.transcript.isEmpty {
-                        Text(speechRecognizer.transcript)
-                            .foregroundStyle(Color.paiTextSecondary)
-                    }
-
-                    if let errorMessage = speechRecognizer.errorMessage {
-                        Text(errorMessage)
-                            .foregroundStyle(.red)
-                    }
-
-                    Button {
-                        cancelAutoParse()
-                        speechRecognizer.resetTranscript()
-                        rawText = ""
-                        parseState = .idle
-                        lastAutoParsedText = ""
-                    } label: {
-                        Label("清空语音文字", systemImage: "trash")
-                    }
-                    .disabled(speechRecognizer.transcript.isEmpty && normalizedRawText.isEmpty)
+                    parseMessage
                 }
-
-                Section("原话") {
-                    TextField("例如：今晚八点前把垃圾带下去", text: $rawText, axis: .vertical)
-                        .lineLimit(2...4)
-                }
-
-                Section("MiniMax 解析") {
-                    Button {
-                        parseWithMiniMax()
-                    } label: {
-                        HStack {
-                            if parseState.isParsing {
-                                ProgressView()
-                            }
-                            Label(parseState == .parsed ? "重新解析" : "解析成任务草稿", systemImage: "sparkles")
-                        }
-                    }
-                    .disabled(!AppConfig.hasMiniMaxAPIKey || normalizedRawText.isEmpty || parseState.isParsing)
-
-                    switch parseState {
-                    case .idle:
-                        if AppConfig.hasMiniMaxAPIKey {
-                            Text("按住录音结束后会自动生成草稿。")
-                                .foregroundStyle(Color.paiTextSecondary)
-                        } else {
-                            Text("MiniMax Key 未配置。")
-                                .foregroundStyle(.red)
-                        }
-                    case .parsing:
-                        Text("正在解析任务标题、细节和截止时间。")
-                            .foregroundStyle(Color.paiTextSecondary)
-                    case .parsed:
-                        Text("已生成草稿，请检查下面内容后发送。")
-                            .foregroundStyle(Color.paiPrimary)
-                    case .failed(let message):
-                        Text(message)
-                            .foregroundStyle(.red)
-                    }
-                }
-
-                Section("审核") {
-                    TextField("标题", text: $title)
-                    TextField("补充细节", text: $detail, axis: .vertical)
-                        .lineLimit(2...5)
-
-                    Toggle("设置截止时间", isOn: $hasDeadline)
-
-                    if hasDeadline {
-                        DatePicker("截止", selection: $deadline, displayedComponents: [.date, .hourAndMinute])
-                    }
-                }
-
-                Section("收件人") {
-                    Picker("发给", selection: $toUserId) {
-                        ForEach(UserRole.allCases) { role in
-                            Text(role.displayName).tag(role)
-                        }
-                    }
-                }
+                .padding(.horizontal, 24)
+                .padding(.top, 10)
+                .padding(.bottom, 118)
             }
-            .navigationTitle("新建任务")
-            .navigationBarTitleDisplayMode(.inline)
-            .scrollContentBackground(.hidden)
-            .background(Color.paiBackground)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("取消") {
-                        dismiss()
-                    }
-                }
 
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("发送") {
-                        save()
-                    }
-                    .disabled(!canSave)
-                }
-            }
-            .onAppear {
-                if let profile = profileStore.profile {
-                    toUserId = profile.counterpartUserId
-                }
-            }
-            .onChange(of: speechRecognizer.transcript) { newValue in
-                guard !newValue.isEmpty else { return }
-                rawText = newValue
-                if parseState == .parsed || parseState.isFailed {
-                    parseState = .idle
-                }
-            }
-            .onChange(of: speechRecognizer.isRecording) { isRecording in
-                if !isRecording && pendingAutoParseAfterRecording {
-                    scheduleAutoParseAfterRecording()
-                }
-            }
-            .onDisappear {
-                cancelAutoParse()
-                speechRecognizer.stopRecording(cancelRecognition: true)
+            sendBar
+        }
+        .background(Color.paiCardBackground.ignoresSafeArea())
+        .onAppear {
+            if let profile = profileStore.profile {
+                toUserId = profile.counterpartUserId
             }
         }
+        .onChange(of: speechRecognizer.transcript) { newValue in
+            guard !newValue.isEmpty else { return }
+            rawText = newValue
+            if parseState == .parsed || parseState.isFailed {
+                parseState = .idle
+            }
+        }
+        .onChange(of: speechRecognizer.isRecording) { isRecording in
+            if !isRecording && pendingAutoParseAfterRecording {
+                scheduleAutoParseAfterRecording()
+            }
+        }
+        .onDisappear {
+            cancelAutoParse()
+            speechRecognizer.stopRecording(cancelRecognition: true)
+        }
+    }
+
+    private var dragHandle: some View {
+        Capsule()
+            .fill(Color.paiTextSecondary.opacity(0.25))
+            .frame(width: 42, height: 5)
+            .padding(.top, 10)
+            .padding(.bottom, 8)
+    }
+
+    private var editorHeader: some View {
+        HStack {
+            Button {
+                dismiss()
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.headline.weight(.semibold))
+                    .foregroundStyle(Color.paiTextSecondary)
+                    .frame(width: 40, height: 40)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("取消")
+
+            Spacer()
+
+            Text("新建任务")
+                .font(.headline.weight(.bold))
+                .foregroundStyle(Color.paiTextPrimary)
+
+            Spacer()
+
+            Button {
+                clearDraft()
+            } label: {
+                Image(systemName: "trash")
+                    .font(.headline.weight(.semibold))
+                    .foregroundStyle(Color.paiTextSecondary)
+                    .frame(width: 40, height: 40)
+            }
+            .buttonStyle(.plain)
+            .disabled(speechRecognizer.transcript.isEmpty && normalizedRawText.isEmpty && normalizedTitle.isEmpty && detail.isEmpty)
+            .accessibilityLabel("清空")
+        }
+        .padding(.horizontal, 16)
+        .padding(.bottom, 4)
+    }
+
+    private var quickInputArea: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            TextField("例如：3点回来带点菜", text: $rawText, axis: .vertical)
+                .font(.system(size: 24, weight: .semibold))
+                .foregroundStyle(Color.paiTextPrimary)
+                .lineLimit(2...4)
+
+            TextField("描述", text: $detail, axis: .vertical)
+                .font(.body)
+                .foregroundStyle(Color.paiTextSecondary)
+                .lineLimit(2...5)
+
+            if !speechRecognizer.transcript.isEmpty {
+                Text(speechRecognizer.transcript)
+                    .font(.caption)
+                    .foregroundStyle(Color.paiTextSecondary)
+                    .lineLimit(2)
+            }
+
+            if let errorMessage = speechRecognizer.errorMessage {
+                Text(errorMessage)
+                    .font(.caption)
+                    .foregroundStyle(Color.paiDanger)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var parsedDraftArea: some View {
+        if parseState == .parsed || !normalizedTitle.isEmpty {
+            VStack(alignment: .leading, spacing: 10) {
+                Label("草稿标题", systemImage: "sparkles")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(Color.paiPrimary)
+
+                TextField("标题", text: $title)
+                    .font(.headline)
+                    .foregroundStyle(Color.paiTextPrimary)
+            }
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.paiBackground)
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        }
+    }
+
+    private var scheduleArea: some View {
+        VStack(spacing: 12) {
+            Toggle(isOn: $hasDeadline) {
+                Label(hasDeadline ? "截止时间" : "不设截止时间", systemImage: "calendar")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(Color.paiTextPrimary)
+            }
+
+            if hasDeadline {
+                DatePicker("时间", selection: $deadline, displayedComponents: [.date, .hourAndMinute])
+                    .datePickerStyle(.compact)
+            }
+
+            Picker("发给", selection: $toUserId) {
+                ForEach(UserRole.allCases) { role in
+                    Text(role.displayName).tag(role)
+                }
+            }
+            .pickerStyle(.segmented)
+        }
+    }
+
+    @ViewBuilder
+    private var parseMessage: some View {
+        switch parseState {
+        case .idle:
+            Text(AppConfig.hasMiniMaxAPIKey ? "按住录音，松开后会自动整理成任务。" : "MiniMax Key 未配置。")
+                .font(.caption)
+                .foregroundStyle(AppConfig.hasMiniMaxAPIKey ? Color.paiTextSecondary : Color.paiDanger)
+        case .parsing:
+            Label("正在整理任务内容", systemImage: "sparkles")
+                .font(.caption)
+                .foregroundStyle(Color.paiTextSecondary)
+        case .parsed:
+            Label("已生成草稿，可以直接发送", systemImage: "checkmark.circle")
+                .font(.caption)
+                .foregroundStyle(Color.paiPrimary)
+        case .failed(let message):
+            Text(message)
+                .font(.caption)
+                .foregroundStyle(Color.paiDanger)
+        }
+    }
+
+    private var sendBar: some View {
+        HStack(spacing: 16) {
+            Button {
+                parseWithMiniMax()
+            } label: {
+                Image(systemName: parseState.isParsing ? "hourglass" : "sparkles")
+                    .font(.title3.weight(.semibold))
+                    .foregroundStyle(Color.paiTextSecondary)
+                    .frame(width: 44, height: 44)
+            }
+            .buttonStyle(.plain)
+            .disabled(!AppConfig.hasMiniMaxAPIKey || normalizedRawText.isEmpty || parseState.isParsing)
+            .accessibilityLabel(parseState == .parsed ? "重新解析" : "解析")
+
+            Spacer()
+
+            Button {
+                save()
+            } label: {
+                Image(systemName: "arrow.up")
+                    .font(.title2.weight(.bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 56, height: 56)
+                    .background(canSave ? Color.paiPrimary : Color.paiTextSecondary.opacity(0.35))
+                    .clipShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .disabled(!canSave)
+            .accessibilityLabel("发送")
+        }
+        .padding(.horizontal, 24)
+        .padding(.top, 12)
+        .padding(.bottom, 20)
+        .background(.ultraThinMaterial)
     }
 
     private var holdToRecordButton: some View {
@@ -307,6 +393,16 @@ struct TaskEditorView: View {
                 }
             }
         }
+    }
+
+    private func clearDraft() {
+        cancelAutoParse()
+        speechRecognizer.resetTranscript()
+        rawText = ""
+        title = ""
+        detail = ""
+        parseState = .idle
+        lastAutoParsedText = ""
     }
 
     private func save() {

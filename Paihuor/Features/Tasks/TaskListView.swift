@@ -7,6 +7,8 @@ struct TaskListView: View {
     @EnvironmentObject private var router: AppRouter
 
     @State private var selectedBoard: TaskBoard = .arranged
+    @State private var pendingDeleteTask: PaihuorTask?
+    @State private var showsDeleteConfirmation = false
 
     private let autoRefreshIntervalNanoseconds: UInt64 = 8_000_000_000
     private let archiveAfterCompletionSeconds: TimeInterval = 24 * 60 * 60
@@ -24,48 +26,36 @@ struct TaskListView: View {
                 )
                 let sections = taskSections(for: visibleTasks)
 
-                ZStack(alignment: .bottomTrailing) {
-                    ScrollView {
-                        LazyVStack(alignment: .leading, spacing: 18) {
-                            boardPicker(
-                                arrangedCount: arrangedTasks.count,
-                                archiveCount: archiveTasks.count
-                            )
+                VStack(spacing: 0) {
+                    topBar(profile: profile)
 
-                            if let message = taskStore.syncErrorMessage {
-                                networkIssueBanner(message: message, profile: profile)
-                            }
+                    ZStack(alignment: .bottom) {
+                        content(sections: sections, profile: profile)
 
-                            if sections.isEmpty {
-                                emptyState(for: selectedBoard)
-                            } else {
-                                ForEach(sections) { section in
-                                    taskSection(section, profile: profile)
-                                }
-                            }
-                        }
-                        .padding(.horizontal, 16)
-                        .padding(.top, 16)
-                        .padding(.bottom, 96)
+                        bottomDock(profile: profile)
+                            .padding(.horizontal, 28)
+                            .padding(.bottom, 14)
                     }
-                    .refreshable {
-                        await taskStore.refreshFromRemote(for: profile)
+                    .overlay(alignment: .bottomTrailing) {
+                        addButton
+                            .padding(.trailing, 32)
+                            .padding(.bottom, 94)
                     }
-
-                    Button {
-                        router.present(.newTask)
-                    } label: {
-                        Image(systemName: "plus")
-                            .font(.title2.bold())
-                            .frame(width: 58, height: 58)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .clipShape(Circle())
-                    .shadow(color: .black.opacity(0.18), radius: 10, x: 0, y: 6)
-                    .padding(20)
-                    .accessibilityLabel("新建任务")
                 }
                 .background(Color.paiBackground.ignoresSafeArea())
+                .confirmationDialog("删除这条任务？", isPresented: $showsDeleteConfirmation, titleVisibility: .visible) {
+                    Button("删除", role: .destructive) {
+                        guard let task = pendingDeleteTask else { return }
+                        taskStore.deleteTask(task, profile: profile)
+                        pendingDeleteTask = nil
+                    }
+
+                    Button("取消", role: .cancel) {
+                        pendingDeleteTask = nil
+                    }
+                } message: {
+                    Text("会从双方任务列表移除，记录仍保留在服务端。")
+                }
                 .onAppear {
                     if selectedBoard == .archive, archiveTasks.isEmpty {
                         selectedBoard = .arranged
@@ -81,17 +71,226 @@ struct TaskListView: View {
         .toolbar(.hidden, for: .navigationBar)
     }
 
-    private func boardPicker(
-        arrangedCount: Int,
-        archiveCount: Int
-    ) -> some View {
-        Picker("任务视角", selection: $selectedBoard) {
-            Text("我安排的 \(arrangedCount)").tag(TaskBoard.arranged)
+    private func topBar(profile: FamilyProfile) -> some View {
+        HStack(spacing: 14) {
+            Menu {
+                Button {
+                    selectedBoard = .arranged
+                } label: {
+                    Label("收集箱", systemImage: "checkmark.square")
+                }
 
-            Text("归档 \(archiveCount)").tag(TaskBoard.archive)
+                Button {
+                    selectedBoard = .archive
+                } label: {
+                    Label("归档", systemImage: "archivebox")
+                }
+            } label: {
+                CircleIcon(systemName: "line.3.horizontal")
+            }
+            .buttonStyle(.plain)
+
+            Text(selectedBoard.title)
+                .font(.system(size: 32, weight: .bold))
+                .foregroundStyle(Color.paiTextPrimary)
+
+            Spacer()
+
+            Menu {
+                Button {
+                    Task {
+                        await taskStore.refreshFromRemote(for: profile)
+                    }
+                } label: {
+                    Label("刷新", systemImage: "arrow.clockwise")
+                }
+
+                Button {
+                    router.present(.newTask)
+                } label: {
+                    Label("新建任务", systemImage: "plus")
+                }
+            } label: {
+                CircleIcon(systemName: "square.grid.2x2")
+            }
+            .buttonStyle(.plain)
         }
-        .pickerStyle(.segmented)
-        .accessibilityLabel("任务视角")
+        .padding(.horizontal, 28)
+        .padding(.top, 16)
+        .padding(.bottom, 18)
+    }
+
+    @ViewBuilder
+    private func content(sections: [TaskDateSection], profile: FamilyProfile) -> some View {
+        if sections.isEmpty {
+            VStack {
+                if let message = taskStore.syncErrorMessage {
+                    networkIssueBanner(message: message, profile: profile)
+                        .padding(.horizontal, 28)
+                        .padding(.top, 4)
+                }
+
+                Spacer()
+
+                emptyState(for: selectedBoard)
+                    .padding(.horizontal, 28)
+                    .offset(y: -54)
+
+                Spacer()
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            List {
+                if let message = taskStore.syncErrorMessage {
+                    networkIssueBanner(message: message, profile: profile)
+                        .listRowInsets(.init(top: 2, leading: 20, bottom: 10, trailing: 20))
+                        .listRowSeparator(.hidden)
+                        .listRowBackground(Color.clear)
+                }
+
+                ForEach(sections) { section in
+                    Section {
+                        ForEach(section.tasks) { task in
+                            TaskCardView(task: task, profile: profile) {
+                                router.present(.taskDetail(task))
+                            }
+                            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                                if task.fromUserId == profile.userId.rawValue {
+                                    Button(role: .destructive) {
+                                        pendingDeleteTask = task
+                                        showsDeleteConfirmation = true
+                                    } label: {
+                                        Label("删除", systemImage: "trash")
+                                    }
+                                }
+
+                                if task.status == .done && !task.archived {
+                                    Button {
+                                        taskStore.archiveTask(task, profile: profile)
+                                    } label: {
+                                        Label("归档", systemImage: "archivebox")
+                                    }
+                                    .tint(.blue)
+                                }
+
+                                Button {
+                                    router.present(.taskDetail(task))
+                                } label: {
+                                    Label("日期", systemImage: "calendar")
+                                }
+                                .tint(.orange)
+                            }
+                            .swipeActions(edge: .leading, allowsFullSwipe: true) {
+                                if task.toUserId == profile.userId.rawValue && task.status == .pending {
+                                    Button {
+                                        taskStore.markReceived(task, profile: profile)
+                                    } label: {
+                                        Label("收到", systemImage: "bell.badge")
+                                    }
+                                    .tint(.blue)
+                                } else if task.toUserId == profile.userId.rawValue && task.status == .received {
+                                    Button {
+                                        taskStore.markDone(task, profile: profile)
+                                    } label: {
+                                        Label("完成", systemImage: "checkmark")
+                                    }
+                                    .tint(.green)
+                                }
+                            }
+                            .listRowInsets(.init(top: 5, leading: 20, bottom: 7, trailing: 20))
+                            .listRowSeparator(.hidden)
+                            .listRowBackground(Color.clear)
+                        }
+                    } header: {
+                        sectionHeader(section)
+                    }
+                }
+
+                Color.clear
+                    .frame(height: 126)
+                    .listRowInsets(.init())
+                    .listRowSeparator(.hidden)
+                    .listRowBackground(Color.clear)
+            }
+            .listStyle(.plain)
+            .scrollContentBackground(.hidden)
+            .environment(\.defaultMinListRowHeight, 1)
+            .refreshable {
+                await taskStore.refreshFromRemote(for: profile)
+            }
+        }
+    }
+
+    private func sectionHeader(_ section: TaskDateSection) -> some View {
+        HStack(spacing: 8) {
+            Text(section.bucket.title)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(Color.paiTextSecondary)
+
+            Text("\(section.tasks.count)")
+                .font(.caption.bold())
+                .foregroundStyle(Color.paiTextSecondary.opacity(0.8))
+
+            Spacer()
+        }
+        .padding(.horizontal, 2)
+        .padding(.top, 6)
+        .padding(.bottom, 2)
+    }
+
+    private var addButton: some View {
+        Button {
+            router.present(.newTask)
+        } label: {
+            Image(systemName: "plus")
+                .font(.system(size: 28, weight: .medium))
+                .foregroundStyle(.white)
+                .frame(width: 66, height: 66)
+                .background(Color.paiPrimary)
+                .clipShape(Circle())
+                .shadow(color: Color.paiPrimary.opacity(0.35), radius: 14, x: 0, y: 8)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("新建任务")
+    }
+
+    private func bottomDock(profile: FamilyProfile) -> some View {
+        HStack(spacing: 42) {
+            dockButton(.arranged, systemName: "checkmark.square.fill")
+            dockButton(.archive, systemName: "archivebox.fill")
+
+            Button {
+                Task {
+                    await taskStore.refreshFromRemote(for: profile)
+                }
+            } label: {
+                Image(systemName: "arrow.clockwise")
+                    .font(.system(size: 24, weight: .semibold))
+                    .foregroundStyle(Color.paiTextPrimary)
+                    .frame(width: 44, height: 44)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("刷新")
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.horizontal, 22)
+        .padding(.vertical, 12)
+        .background(.ultraThinMaterial)
+        .clipShape(Capsule())
+        .shadow(color: Color.black.opacity(0.08), radius: 18, x: 0, y: 8)
+    }
+
+    private func dockButton(_ board: TaskBoard, systemName: String) -> some View {
+        Button {
+            selectedBoard = board
+        } label: {
+            Image(systemName: systemName)
+                .font(.system(size: 24, weight: .semibold))
+                .foregroundStyle(selectedBoard == board ? Color.paiPrimary : Color.paiTextPrimary)
+                .frame(width: 44, height: 44)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(board.title)
     }
 
     private func runAutoRefresh(for profile: FamilyProfile) async {
@@ -168,38 +367,6 @@ struct TaskListView: View {
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 
-    private func taskSection(_ section: TaskDateSection, profile: FamilyProfile) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 8) {
-                Label(section.bucket.title, systemImage: section.bucket.icon)
-                    .font(.headline)
-                    .foregroundStyle(section.bucket.tint)
-
-                Text("\(section.tasks.count)")
-                    .font(.caption.bold())
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 3)
-                    .background(section.bucket.tint)
-                    .clipShape(Capsule())
-
-                Spacer()
-            }
-
-            if !section.bucket.subtitle.isEmpty {
-                Text(section.bucket.subtitle)
-                    .font(.caption)
-                    .foregroundStyle(Color.paiTextSecondary)
-            }
-
-            LazyVStack(spacing: 10) {
-                ForEach(section.tasks) { task in
-                    TaskCardView(task: task, profile: profile)
-                }
-            }
-        }
-    }
-
     private func taskSections(for tasks: [PaihuorTask]) -> [TaskDateSection] {
         let now = Date()
         let calendar = Calendar.current
@@ -237,24 +404,40 @@ struct TaskListView: View {
     }
 
     private func emptyState(for board: TaskBoard) -> some View {
-        VStack(spacing: 14) {
+        VStack(spacing: 18) {
             Image(systemName: board.emptyIcon)
-                .font(.system(size: 44, weight: .semibold))
-                .foregroundStyle(Color.paiPrimary)
+                .font(.system(size: 68, weight: .regular))
+                .foregroundStyle(Color.paiPrimary.opacity(0.9))
+                .frame(width: 120, height: 120)
+                .background(Color.paiPrimaryLight.opacity(0.55))
+                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
 
-            Text(board.emptyTitle)
-                .font(.headline)
-                .foregroundStyle(Color.paiTextPrimary)
+            VStack(spacing: 7) {
+                Text(board.emptyTitle)
+                    .font(.title3.weight(.bold))
+                    .foregroundStyle(Color.paiTextPrimary)
 
-            Text(board.emptySubtitle)
-                .font(.subheadline)
-                .multilineTextAlignment(.center)
-                .foregroundStyle(Color.paiTextSecondary)
+                Text(board.emptySubtitle)
+                    .font(.subheadline)
+                    .multilineTextAlignment(.center)
+                    .foregroundStyle(Color.paiTextSecondary)
+            }
         }
         .frame(maxWidth: .infinity)
-        .padding(28)
-        .background(Color.paiCardBackground)
-        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+}
+
+private struct CircleIcon: View {
+    var systemName: String
+
+    var body: some View {
+        Image(systemName: systemName)
+            .font(.title3.weight(.semibold))
+            .foregroundStyle(Color.paiTextPrimary)
+            .frame(width: 58, height: 58)
+            .background(.ultraThinMaterial)
+            .clipShape(Circle())
+            .shadow(color: Color.black.opacity(0.05), radius: 10, x: 0, y: 4)
     }
 }
 
@@ -264,10 +447,19 @@ private enum TaskBoard: String, CaseIterable, Identifiable {
 
     var id: String { rawValue }
 
+    var title: String {
+        switch self {
+        case .arranged:
+            return "收集箱"
+        case .archive:
+            return "归档"
+        }
+    }
+
     var emptyIcon: String {
         switch self {
         case .arranged:
-            return "paperplane"
+            return "checklist.unchecked"
         case .archive:
             return "archivebox"
         }
@@ -276,7 +468,7 @@ private enum TaskBoard: String, CaseIterable, Identifiable {
     var emptyTitle: String {
         switch self {
         case .arranged:
-            return "还没有安排出去的事"
+            return "没有任务"
         case .archive:
             return "归档里还没有记录"
         }
@@ -285,9 +477,9 @@ private enum TaskBoard: String, CaseIterable, Identifiable {
     var emptySubtitle: String {
         switch self {
         case .arranged:
-            return "点右下角加号，交代一件事。"
+            return "点击 + 按钮即可添加"
         case .archive:
-            return "完成超过一天的任务会自动收进这里，记录不会删除。"
+            return "完成后的任务会收进这里，记录不会删除"
         }
     }
 }
@@ -323,57 +515,6 @@ private enum TaskDateBucket: String, CaseIterable, Identifiable {
             return "无截止时间"
         case .completed:
             return "已完成"
-        }
-    }
-
-    var subtitle: String {
-        switch self {
-        case .overdue:
-            return "需要优先处理"
-        case .today:
-            return "今天要做完"
-        case .tomorrow:
-            return "明天处理"
-        case .later:
-            return "后续安排"
-        case .noDeadline:
-            return "没有明确时间"
-        case .completed:
-            return "已经勾掉"
-        }
-    }
-
-    var icon: String {
-        switch self {
-        case .overdue:
-            return "exclamationmark.triangle.fill"
-        case .today:
-            return "sun.max.fill"
-        case .tomorrow:
-            return "calendar"
-        case .later:
-            return "tray.full"
-        case .noDeadline:
-            return "clock.badge.questionmark"
-        case .completed:
-            return "checkmark.circle.fill"
-        }
-    }
-
-    var tint: Color {
-        switch self {
-        case .overdue:
-            return .paiDanger
-        case .today:
-            return .paiPrimary
-        case .tomorrow:
-            return .paiWarning
-        case .later:
-            return .paiTextPrimary
-        case .noDeadline:
-            return .paiTextSecondary
-        case .completed:
-            return .paiTextSecondary
         }
     }
 

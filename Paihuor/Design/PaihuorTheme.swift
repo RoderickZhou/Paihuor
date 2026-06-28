@@ -1,14 +1,14 @@
 import SwiftUI
 
 extension Color {
-    static let paiPrimary = Color(hex: "#4CAF50")
-    static let paiPrimaryLight = Color(hex: "#81C784")
-    static let paiBackground = Color(hex: "#F5F7F6")
+    static let paiPrimary = Color(hex: "#477CFF")
+    static let paiPrimaryLight = Color(hex: "#DCE6FF")
+    static let paiBackground = Color(hex: "#F3F6FF")
     static let paiCardBackground = Color(hex: "#FFFFFF")
-    static let paiTextPrimary = Color(hex: "#212121")
-    static let paiTextSecondary = Color(hex: "#9E9E9E")
-    static let paiWarning = Color(hex: "#FF9800")
-    static let paiDanger = Color(hex: "#F44336")
+    static let paiTextPrimary = Color(hex: "#17181C")
+    static let paiTextSecondary = Color(hex: "#9BA1AE")
+    static let paiWarning = Color(hex: "#FF9F1C")
+    static let paiDanger = Color(hex: "#EF3340")
 
     init(hex: String) {
         let sanitized = hex.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)

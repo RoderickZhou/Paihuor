@@ -37,8 +37,12 @@ struct AppView: View {
                 switch sheet {
                 case .newTask:
                     TaskEditorView()
+                        .presentationDetents([.height(520), .large])
                 case .negotiation(let task):
                     NegotiationSheet(task: task)
+                case .taskDetail(let task):
+                    TaskDetailSheet(task: task)
+                        .presentationDetents([.medium, .large])
                 }
             }
         }

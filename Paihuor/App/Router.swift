@@ -3,6 +3,7 @@ import Foundation
 enum AppSheet: Identifiable {
     case newTask
     case negotiation(PaihuorTask)
+    case taskDetail(PaihuorTask)
 
     var id: String {
         switch self {
@@ -10,6 +11,8 @@ enum AppSheet: Identifiable {
             return "new-task"
         case .negotiation(let task):
             return "negotiation-\(task.objectId)"
+        case .taskDetail(let task):
+            return "task-detail-\(task.objectId)"
         }
     }
 }

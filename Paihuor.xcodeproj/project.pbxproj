@@ -23,6 +23,7 @@
 		200000000000000000000014 /* TaskCardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000014 /* TaskCardView.swift */; };
 		200000000000000000000015 /* TaskEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000015 /* TaskEditorView.swift */; };
 		200000000000000000000016 /* NegotiationSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000016 /* NegotiationSheet.swift */; };
+		200000000000000000000025 /* TaskDetailSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000035 /* TaskDetailSheet.swift */; };
 		200000000000000000000018 /* PaihuorWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000020 /* PaihuorWidget.swift */; };
 		200000000000000000000019 /* PaihuorWidget.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = 100000000000000000000021 /* PaihuorWidget.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		200000000000000000000020 /* AppConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000027 /* AppConfig.swift */; };
@@ -73,6 +74,7 @@
 		100000000000000000000014 /* TaskCardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TaskCardView.swift; sourceTree = "<group>"; };
 		100000000000000000000015 /* TaskEditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TaskEditorView.swift; sourceTree = "<group>"; };
 		100000000000000000000016 /* NegotiationSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NegotiationSheet.swift; sourceTree = "<group>"; };
+		100000000000000000000035 /* TaskDetailSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TaskDetailSheet.swift; sourceTree = "<group>"; };
 		100000000000000000000017 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		100000000000000000000018 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		100000000000000000000019 /* AppConfig.example.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppConfig.example.swift; sourceTree = "<group>"; };
@@ -203,6 +205,7 @@
 				100000000000000000000014 /* TaskCardView.swift */,
 				100000000000000000000015 /* TaskEditorView.swift */,
 				100000000000000000000016 /* NegotiationSheet.swift */,
+				100000000000000000000035 /* TaskDetailSheet.swift */,
 			);
 			path = Tasks;
 			sourceTree = "<group>";
@@ -377,6 +380,7 @@
 				200000000000000000000014 /* TaskCardView.swift in Sources */,
 				200000000000000000000015 /* TaskEditorView.swift in Sources */,
 				200000000000000000000016 /* NegotiationSheet.swift in Sources */,
+				200000000000000000000025 /* TaskDetailSheet.swift in Sources */,
 				200000000000000000000020 /* AppConfig.swift in Sources */,
 				200000000000000000000021 /* ParsedTaskDraft.swift in Sources */,
 				200000000000000000000022 /* MiniMaxTaskParser.swift in Sources */,

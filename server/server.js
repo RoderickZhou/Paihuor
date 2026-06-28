@@ -42,7 +42,11 @@ db.exec(`
     reminder   TEXT DEFAULT '{}',
     negotiation TEXT DEFAULT '[]',
     archived   INTEGER DEFAULT 0,
+    archivedAt INTEGER DEFAULT 0,
+    archivedBy TEXT DEFAULT '',
     deleted    INTEGER DEFAULT 0,
+    deletedAt  INTEGER DEFAULT 0,
+    deletedBy  TEXT DEFAULT '',
     receivedAt INTEGER DEFAULT 0,
     doneAt     INTEGER DEFAULT 0,
     createdAt  INTEGER DEFAULT 0,
@@ -55,10 +59,16 @@ db.exec(`
   );
 `);
 
+// 旧库补列(幂等; 列已存在则 ALTER 抛错被忽略)。对齐 iOS 契约的审计字段。
+["archivedAt INTEGER DEFAULT 0", "archivedBy TEXT DEFAULT ''", "deletedAt INTEGER DEFAULT 0", "deletedBy TEXT DEFAULT ''"].forEach((col) => {
+  try { db.exec('ALTER TABLE tasks ADD COLUMN ' + col); } catch (e) {}
+});
+
 // 标量字段列表（真实列），其余 reminder/negotiation 为 JSON 列
 const SCALAR = ['id','familyId','fromUserId','toUserId','rawText','title','detail',
-  'deadline','status','archived','deleted','receivedAt','doneAt','createdAt','updatedAt'];
-const INTCOLS = ['deadline','receivedAt','doneAt','createdAt','updatedAt']; // 整数列(其余标量按字符串)
+  'deadline','status','archived','deleted','receivedAt','doneAt','createdAt','updatedAt',
+  'archivedAt','archivedBy','deletedAt','deletedBy'];
+const INTCOLS = ['deadline','receivedAt','doneAt','createdAt','updatedAt','archivedAt','deletedAt']; // 整数列(其余标量按字符串)
 
 function rowToTask(r) {
   if (!r) return null;
@@ -71,6 +81,8 @@ function rowToTask(r) {
     title: r.title, detail: r.detail, deadline: r.deadline, status: r.status,
     reminder, negotiation,
     archived: !!r.archived, deleted: !!r.deleted,
+    archivedAt: r.archivedAt || 0, archivedBy: r.archivedBy || '',
+    deletedAt: r.deletedAt || 0, deletedBy: r.deletedBy || '',
     receivedAt: r.receivedAt, doneAt: r.doneAt,
     createdAt: r.createdAt, updatedAt: r.updatedAt
   };
@@ -83,15 +95,17 @@ function getTask(objectId) {
 function insertTask(t) {
   db.prepare(`INSERT INTO tasks
     (objectId,id,familyId,fromUserId,toUserId,rawText,title,detail,deadline,status,
-     reminder,negotiation,archived,deleted,receivedAt,doneAt,createdAt,updatedAt)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+     reminder,negotiation,archived,deleted,receivedAt,doneAt,createdAt,updatedAt,
+     archivedAt,archivedBy,deletedAt,deletedBy)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
     t.objectId, t.id || '', t.familyId, t.fromUserId || '', t.toUserId || '',
     t.rawText || '', t.title || '', t.detail || '', Number(t.deadline) || 0,
     t.status || 'pending',
     JSON.stringify(t.reminder || {}), JSON.stringify(t.negotiation || []),
     t.archived ? 1 : 0, t.deleted ? 1 : 0,
     Number(t.receivedAt) || 0, Number(t.doneAt) || 0,
-    Number(t.createdAt) || 0, Number(t.updatedAt) || 0
+    Number(t.createdAt) || 0, Number(t.updatedAt) || 0,
+    Number(t.archivedAt) || 0, t.archivedBy || '', Number(t.deletedAt) || 0, t.deletedBy || ''
   );
 }
 
@@ -104,7 +118,13 @@ function patchTask(objectId, patch) {
     if (k === 'objectId' || k === 'updatedAt') continue;
     if (k === 'reminder') { sets.push('reminder=?'); vals.push(JSON.stringify(patch[k] || {})); }
     else if (k === 'negotiation') { sets.push('negotiation=?'); vals.push(JSON.stringify(patch[k] || [])); }
-    else if (k === 'archived' || k === 'deleted') { sets.push(`${k}=?`); vals.push(patch[k] ? 1 : 0); }
+    else if (k === 'archived' || k === 'deleted') {
+      const on = patch[k] ? 1 : 0;
+      sets.push(`${k}=?`); vals.push(on);
+      // 自动维护对应 At 时间戳(patch 未显式给时)：置位=now，取消=0
+      const atCol = k === 'archived' ? 'archivedAt' : 'deletedAt';
+      if (patch[atCol] === undefined) { sets.push(`${atCol}=?`); vals.push(on ? Date.now() : 0); }
+    }
     else if (SCALAR.includes(k)) {
       let v = patch[k];
       if (v === undefined || v === null) continue;
@@ -279,8 +299,11 @@ const server = http.createServer(async (req, res) => {
       const r = db.prepare('DELETE FROM tasks WHERE objectId=?').run(id);
       return send(res, 200, { ok: true, hard: true, removed: r.changes });
     }
-    // 软删：置 deleted=1 + 刷新 updatedAt，让另一端轮询到墓碑后本地移除
-    const updated = patchTask(id, { deleted: true });
+    // 软删：置 deleted=1 + 刷新 updatedAt(并自动记 deletedAt)，让另一端轮询到墓碑后本地移除
+    const by = url.searchParams.get('by') || '';
+    const delPatch = { deleted: true };
+    if (by) { delPatch.deletedBy = by; }
+    const updated = patchTask(id, delPatch);
     if (!updated) return send(res, 404, { error: 'not found' });
     return send(res, 200, updated);
   }

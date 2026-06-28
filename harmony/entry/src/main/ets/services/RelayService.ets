@@ -130,12 +130,13 @@ export class RelayService {
     }
   }
 
-  // 删除任务：中继做软删（置 deleted=1 并刷新 updatedAt），对端轮询到墓碑后本地移除
-  async remove(objectId: string): Promise<boolean> {
+  // 删除任务：中继做软删（置 deleted=1 并刷新 updatedAt），对端轮询到墓碑后本地移除。by=发起人
+  async remove(objectId: string, by: string): Promise<boolean> {
     const b = await this.base();
     const c = http.createHttp();
     try {
-      const resp = await c.request(b + '/tasks/' + objectId, {
+      const u = b + '/tasks/' + objectId + (by.length > 0 ? ('?by=' + encodeURIComponent(by)) : '');
+      const resp = await c.request(u, {
         method: http.RequestMethod.DELETE, header: this.header(),
         connectTimeout: 10000, readTimeout: 10000
       });

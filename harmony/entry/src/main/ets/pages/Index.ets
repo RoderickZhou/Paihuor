@@ -1037,9 +1037,9 @@ struct Index {
 
   private async doDelete(item: TaskItem): Promise<void> {
     await ReminderService.getInstance().cancelForTask(item.reminderIds);
-    // 先通知中继软删（对端轮询到墓碑后本地移除），再删本机
+    // 先通知中继软删（对端轮询到墓碑后本地移除），再删本机；带上发起人
     if (item.objectId.length > 0) {
-      await RelayService.getInstance().remove(item.objectId);
+      await RelayService.getInstance().remove(item.objectId, AppConfig.MY_USER_ID);
     }
     await TaskStore.getInstance().remove(item.id);
     this.refresh();

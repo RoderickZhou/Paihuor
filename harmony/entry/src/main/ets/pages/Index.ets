@@ -211,6 +211,7 @@ struct Index {
               ListItem() {
                 this.TaskCard(item)
               }
+              .swipeAction({ end: this.SwipeEnd(item) })
             }, (item: TaskItem) => item.id + '-' + item.status + '-' + item.deadline + '-' + item.updatedAt + '-' + item.receivedAt + '-' + item.doneAt + '-' + item.negotiation.length + '-' + item.archived + '-' + item.title)
           }
           .width('100%')
@@ -257,29 +258,20 @@ struct Index {
     .height('100%')
   }
 
-  // 滴答清单风格卡片：左侧勾选圈 + 标题(完成划线) + 截止(按紧急度变色)
+  // 滴答清单风格卡片：左方形勾选框(点击推进状态) + 标题 + 截止(⏰,按紧急度变色) + 来源·状态。
+  // 操作通过 左滑(商量/编辑/归档/删除) 与 点卡片(发起方编辑)，不再常驻按钮。
   @Builder
   TaskCard(item: TaskItem) {
     Row() {
-      this.CheckCircle(item)
+      this.CheckBox(item)
       Column() {
-        Row() {
-          Text(item.title.length > 0 ? item.title : item.rawText)
-            .fontSize(16)
-            .fontWeight(FontWeight.Medium)
-            .fontColor((item.status === TaskStatus.DONE || item.archived) ? Constants.COLOR_TEXT_SECONDARY : Constants.COLOR_TEXT_PRIMARY)
-            .decoration({ type: (item.status === TaskStatus.DONE || item.archived) ? TextDecorationType.LineThrough : TextDecorationType.None })
-            .maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis })
-            .layoutWeight(1)
-          Text(this.statusLabel(item.status))
-            .fontSize(11)
-            .fontColor(Color.White)
-            .backgroundColor(this.statusColor(item.status))
-            .borderRadius(6)
-            .padding({ left: 7, right: 7, top: 2, bottom: 2 })
-            .margin({ left: 8 })
-        }
-        .width('100%')
+        Text(item.title.length > 0 ? item.title : item.rawText)
+          .fontSize(16)
+          .fontWeight(FontWeight.Medium)
+          .fontColor((item.status === TaskStatus.DONE || item.archived) ? Constants.COLOR_TEXT_SECONDARY : Constants.COLOR_TEXT_PRIMARY)
+          .decoration({ type: (item.status === TaskStatus.DONE || item.archived) ? TextDecorationType.LineThrough : TextDecorationType.None })
+          .maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis })
+          .width('100%')
 
         if (item.detail.length > 0) {
           Text(item.detail)
@@ -288,37 +280,44 @@ struct Index {
             .width('100%').margin({ top: 4 })
         }
 
-        Row() {
-          Text('🕑 ' + Constants.formatDeadline(item.deadline)
-            + (item.status === TaskStatus.RECEIVED && item.deadline > 0 ? ('  ' + Constants.formatRemaining(item.deadline)) : ''))
+        if (item.deadline > 0) {
+          Text('⏰ ' + Constants.formatDeadline(item.deadline)
+            + (item.status === TaskStatus.RECEIVED ? ('  ' + Constants.formatRemaining(item.deadline)) : ''))
             .fontSize(12).fontColor(this.deadlineColor(item))
+            .width('100%').margin({ top: 6 })
         }
-        .width('100%').margin({ top: 6 })
+
+        Text(this.directionLabel(item))
+          .fontSize(11).fontColor(Constants.COLOR_TEXT_SECONDARY)
+          .width('100%').margin({ top: 4 })
 
         if (item.negotiation.length > 0) {
           this.NegPreview(item)
         }
-
-        this.ActionRow(item)
       }
       .layoutWeight(1)
       .alignItems(HorizontalAlign.Start)
+      .onClick(() => {
+        if (this.isCreator(item) && !item.archived) {
+          this.openEdit(item);
+        }
+      })
     }
     .width('100%')
     .padding(14)
     .backgroundColor(Constants.COLOR_CARD_BG)
-    .borderRadius(14)
+    .borderRadius(12)
     .shadow({ radius: 6, color: '#11000000', offsetY: 2 })
     .alignItems(VerticalAlign.Top)
     .opacity(item.archived ? 0.7 : 1)
   }
 
-  // 左侧勾选圈：收到的活点圈即完成；已完成/归档显示绿色对勾
+  // 左侧方形勾选框：点击推进状态(仅接收方)；已完成/归档显示对勾
   @Builder
-  CheckCircle(item: TaskItem) {
+  CheckBox(item: TaskItem) {
     Stack() {
       Column()
-        .width(22).height(22).borderRadius(11)
+        .width(22).height(22).borderRadius(6)
         .border({ width: 2, color: this.circleColor(item) })
         .backgroundColor((item.status === TaskStatus.DONE || item.archived) ? Constants.COLOR_PRIMARY : Color.Transparent)
       if (item.status === TaskStatus.DONE || item.archived) {
@@ -326,11 +325,38 @@ struct Index {
       }
     }
     .width(22).height(22).margin({ right: 12, top: 2 })
-    .onClick(() => {
-      if (item.status === TaskStatus.RECEIVED && this.isReceiver(item)) {
-        this.onDone(item);
+    .onClick(() => { this.onCheckbox(item); })
+  }
+
+  // 左滑出操作：按角色/状态给 商量/编辑/归档/删除
+  @Builder
+  SwipeEnd(item: TaskItem) {
+    Row() {
+      if (!item.archived && item.status !== TaskStatus.DONE) {
+        this.SwipeBtn('商量', Constants.COLOR_WARNING, () => { this.openNegotiate(item); })
       }
-    })
+      if (item.archived) {
+        this.SwipeBtn('取消归档', Constants.COLOR_PRIMARY_LIGHT, () => { this.onUnarchive(item); })
+      } else if (item.status === TaskStatus.DONE) {
+        this.SwipeBtn('归档', Constants.COLOR_PRIMARY, () => { this.onArchive(item); })
+      }
+      if (this.isCreator(item)) {
+        this.SwipeBtn('编辑', Constants.COLOR_PRIMARY_DARK, () => { this.openEdit(item); })
+        this.SwipeBtn('删除', Constants.COLOR_DANGER, () => { this.onDelete(item); })
+      }
+    }
+    .height('100%')
+  }
+
+  @Builder
+  SwipeBtn(label: string, color: string, action: () => void) {
+    Column() {
+      Text(label).fontSize(13).fontColor(Color.White)
+    }
+    .width(68).height('100%')
+    .justifyContent(FlexAlign.Center)
+    .backgroundColor(color)
+    .onClick(() => { action(); })
   }
 
   private circleColor(item: TaskItem): string {
@@ -776,6 +802,7 @@ struct Index {
             ListItem() {
               this.TaskCard(item)
             }
+            .swipeAction({ end: this.SwipeEnd(item) })
           }, (item: TaskItem) => 'arc-' + item.id + '-' + item.archived + '-' + item.updatedAt + '-' + item.deadline + '-' + item.title)
         }
         .width('100%').layoutWeight(1)
@@ -1028,6 +1055,26 @@ struct Index {
 
   private isReceiver(item: TaskItem): boolean {
     return item.toUserId === AppConfig.MY_USER_ID;
+  }
+
+  // 点方形框推进状态：仅接收方；待收到/商量中→收到，收到→完成(并自动归档)
+  onCheckbox(item: TaskItem): void {
+    if (item.archived || !this.isReceiver(item)) {
+      return;
+    }
+    if (item.status === TaskStatus.PENDING || item.status === TaskStatus.NEGOTIATING) {
+      this.onReceive(item);
+    } else if (item.status === TaskStatus.RECEIVED) {
+      this.onDone(item);
+    }
+  }
+
+  private directionLabel(item: TaskItem): string {
+    const st = this.statusLabel(item.status);
+    if (this.isReceiver(item)) {
+      return '来自 ' + this.displayName(item.fromUserId) + ' · ' + st;
+    }
+    return '给 ' + this.displayName(item.toUserId) + ' · ' + st;
   }
 
   openArchive(): void {

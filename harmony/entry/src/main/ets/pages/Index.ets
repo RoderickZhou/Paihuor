@@ -32,8 +32,8 @@ struct Index {
   @State negText: string = '';
   @State negProposedDeadline: number = 0;
   @State negProposedCode: number = 0;
-  // 归档区
-  @State showArchive: boolean = false;
+  // 主屏面板：收集箱 / 归档，和 iOS 一样在同一页内切换
+  @State selectedBoard: string = 'inbox';
   @State archivedTasks: TaskItem[] = [];
   @State archivedCount: number = 0;
   @State doneUnarchivedCount: number = 0;
@@ -76,13 +76,13 @@ struct Index {
 
   refresh(): void {
     const store = TaskStore.getInstance();
-    this.tasks = store.getActive();
+    const active = store.getActive();
     const arch = store.getArchived();
     this.archivedCount = arch.length;
     let doneU = 0;
     let unread = 0;
-    for (let i = 0; i < this.tasks.length; i++) {
-      const t = this.tasks[i];
+    for (let i = 0; i < active.length; i++) {
+      const t = active[i];
       if (t.status === TaskStatus.DONE && !t.archived) {
         doneU++;
       }
@@ -92,6 +92,8 @@ struct Index {
       }
     }
     this.doneUnarchivedCount = doneU;
+    this.archivedTasks = arch;
+    this.tasks = this.selectedBoard === 'archive' ? arch : active;
     NotificationService.getInstance().setBadge(unread); // 桌面图标角标未读数
     // 推送桌面服务卡片更新（App 活着时近实时；无卡片则内部直接返回）
     try {
@@ -99,9 +101,6 @@ struct Index {
       updateAllCards(ctx);
     } catch (err) {
       // 忽略
-    }
-    if (this.showArchive) {
-      this.archivedTasks = arch;
     }
   }
 
@@ -201,8 +200,8 @@ struct Index {
       Column() {
         // 顶部标题 + 快捷入口
         Row() {
-          this.TopCircleIcon('☰')
-          Text('收集箱')
+          this.TopCircleIcon('menu')
+          Text(this.boardTitle())
             .fontSize(32)
             .fontWeight(FontWeight.Bold)
             .fontColor(Constants.COLOR_TEXT_PRIMARY)
@@ -215,20 +214,13 @@ struct Index {
               .margin({ right: 8 })
               .onClick(() => { this.onArchiveAllDone(); })
           }
-          this.TopCircleIcon('▦')
+          this.TopCircleIcon('grid')
         }
         .width('100%')
         .padding({ left: 24, right: 24, top: 16, bottom: 14 })
 
         if (this.tasks.length === 0) {
-          Column() {
-            Text('🌱').fontSize(48).margin({ bottom: 12 })
-            Text('还没有事项').fontSize(16).fontColor(Constants.COLOR_TEXT_SECONDARY)
-            Text('点右下角 ＋ 派一件活').fontSize(13).fontColor(Constants.COLOR_TEXT_SECONDARY).margin({ top: 6 })
-          }
-          .width('100%')
-          .layoutWeight(1)
-          .justifyContent(FlexAlign.Center)
+          this.EmptyState()
         } else {
           List({ space: 12 }) {
             ForEach(this.tasks, (item: TaskItem) => {
@@ -280,64 +272,114 @@ struct Index {
         this.EditSheet()
       }
 
-      if (this.showArchive) {
-        this.ArchiveSheet()
-      }
     }
     .width('100%')
     .height('100%')
   }
 
   @Builder
-  TopCircleIcon(label: string) {
-    Text(label)
-      .fontSize(22)
-      .fontWeight(FontWeight.Bold)
-      .fontColor(Constants.COLOR_TEXT_PRIMARY)
-      .width(52)
-      .height(52)
-      .textAlign(TextAlign.Center)
-      .backgroundColor('#CCFFFFFF')
-      .borderRadius(26)
-      .shadow({ radius: 10, color: '#11000000', offsetY: 4 })
-      .onClick(() => {
-        if (label === '▦') {
-          this.openArchive();
-        }
-      })
+  TopCircleIcon(kind: string) {
+    Stack() {
+      Column()
+        .width(58)
+        .height(58)
+        .borderRadius(29)
+        .backgroundColor('#CCFFFFFF')
+      if (kind === 'grid') {
+        Image($r('app.media.ic_top_grid'))
+          .width(28).height(28)
+      } else {
+        Image($r('app.media.ic_top_menu'))
+          .width(28).height(28)
+      }
+    }
+    .width(58)
+    .height(58)
+    .shadow({ radius: 10, color: '#11000000', offsetY: 4 })
   }
 
   @Builder
   BottomDock() {
     Row() {
-      Stack() {
+      Row() {
+        this.DockInboxIcon()
+        this.DockArchiveIcon()
+        Image($r('app.media.ic_refresh'))
+          .width(30).height(30)
+          .onClick(() => { this.poll(); this.refresh(); })
+      }
+      .width('86%')
+      .height(68)
+      .justifyContent(FlexAlign.SpaceAround)
+      .padding({ left: 22, right: 22 })
+      .backgroundColor('#E6FFFFFF')
+      .borderRadius(34)
+      .shadow({ radius: 18, color: '#22000000', offsetY: 8 })
+    }
+    .width('100%')
+    .justifyContent(FlexAlign.Center)
+    .margin({ bottom: 22 })
+  }
+
+  @Builder
+  DockInboxIcon() {
+    Stack() {
+      if (this.selectedBoard === 'inbox') {
         Column()
-          .width(40).height(40)
-          .borderRadius(20)
+          .width(44).height(44)
+          .borderRadius(22)
           .backgroundColor(Constants.COLOR_PRIMARY_LIGHT)
         Image($r('app.media.ic_inbox_active'))
-          .width(28).height(28)
+          .width(30).height(30)
+      } else {
+        Image($r('app.media.ic_inbox'))
+          .width(30).height(30)
       }
-      .width(44).height(44)
-      .margin({ right: 42 })
-
-      Image($r('app.media.ic_archive'))
-        .width(28).height(28)
-        .margin({ right: 42 })
-        .onClick(() => { this.openArchive(); })
-
-      Image($r('app.media.ic_refresh'))
-        .width(28).height(28)
-        .onClick(() => { this.poll(); this.refresh(); })
     }
-    .width(324)
-    .height(68)
+    .width(48).height(48)
+    .onClick(() => { this.openInbox(); })
+  }
+
+  @Builder
+  DockArchiveIcon() {
+    Stack() {
+      if (this.selectedBoard === 'archive') {
+        Column()
+          .width(44).height(44)
+          .borderRadius(22)
+          .backgroundColor(Constants.COLOR_PRIMARY_LIGHT)
+        Image($r('app.media.ic_archive_active'))
+          .width(30).height(30)
+      } else {
+        Image($r('app.media.ic_archive'))
+          .width(30).height(30)
+      }
+    }
+    .width(48).height(48)
+    .onClick(() => { this.openArchive(); })
+  }
+
+  @Builder
+  EmptyState() {
+    Column() {
+      Image(this.selectedBoard === 'archive' ? $r('app.media.ic_empty_archive') : $r('app.media.ic_empty_inbox'))
+        .width(120)
+        .height(120)
+        .margin({ bottom: 18 })
+      Text(this.selectedBoard === 'archive' ? '归档里还没有记录' : '没有任务')
+        .fontSize(22)
+        .fontWeight(FontWeight.Bold)
+        .fontColor(Constants.COLOR_TEXT_PRIMARY)
+      Text(this.selectedBoard === 'archive' ? '完成后的任务会收进这里' : '点击 + 按钮即可添加')
+        .fontSize(16)
+        .fontColor(Constants.COLOR_TEXT_SECONDARY)
+        .margin({ top: 8 })
+    }
+    .width('100%')
+    .layoutWeight(1)
     .justifyContent(FlexAlign.Center)
-    .padding({ left: 22, right: 22 })
-    .backgroundColor('#E6FFFFFF')
-    .borderRadius(34)
-    .shadow({ radius: 18, color: '#22000000', offsetY: 8 })
-    .margin({ left: 54, right: 54, bottom: 22 })
+    .alignItems(HorizontalAlign.Center)
+    .padding({ bottom: 104 })
   }
 
   // 滴答清单风格卡片：左方形勾选框(点击推进状态) + 标题 + 截止(⏰,按紧急度变色) + 来源·状态。
@@ -1405,9 +1447,6 @@ struct Index {
     await TaskStore.getInstance().remove(item.id);
     this.showDetail = false;
     this.refresh();
-    if (this.showArchive) {
-      this.archivedTasks = TaskStore.getInstance().getArchived();
-    }
     this.toast('已删除');
   }
 
@@ -1453,12 +1492,21 @@ struct Index {
   }
 
   openArchive(): void {
-    this.archivedTasks = TaskStore.getInstance().getArchived();
-    this.showArchive = true;
+    this.selectedBoard = 'archive';
+    this.refresh();
   }
 
   closeArchive(): void {
-    this.showArchive = false;
+    this.openInbox();
+  }
+
+  openInbox(): void {
+    this.selectedBoard = 'inbox';
+    this.refresh();
+  }
+
+  private boardTitle(): string {
+    return this.selectedBoard === 'archive' ? '归档' : '收集箱';
   }
 
   async onArchive(item: TaskItem): Promise<void> {

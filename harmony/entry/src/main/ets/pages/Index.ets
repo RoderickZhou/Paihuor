@@ -202,7 +202,7 @@ struct Index {
         Row() {
           this.TopCircleIcon('menu')
           Text(this.boardTitle())
-            .fontSize(32)
+            .fontSize(28)
             .fontWeight(FontWeight.Bold)
             .fontColor(Constants.COLOR_TEXT_PRIMARY)
             .margin({ left: 14 })
@@ -281,21 +281,20 @@ struct Index {
   TopCircleIcon(kind: string) {
     Stack() {
       Column()
-        .width(58)
-        .height(58)
-        .borderRadius(29)
+        .width(52)
+        .height(52)
+        .borderRadius(26)
         .backgroundColor('#CCFFFFFF')
       if (kind === 'grid') {
         Image($r('app.media.ic_top_grid'))
-          .width(28).height(28)
+          .width(26).height(26)
       } else {
         Image($r('app.media.ic_top_menu'))
-          .width(28).height(28)
+          .width(26).height(26)
       }
     }
-    .width(58)
-    .height(58)
-    .shadow({ radius: 10, color: '#11000000', offsetY: 4 })
+    .width(52)
+    .height(52)
   }
 
   @Builder

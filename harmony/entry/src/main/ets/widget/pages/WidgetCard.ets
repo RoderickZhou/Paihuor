@@ -12,7 +12,9 @@ struct WidgetCard {
   build() {
     Column() {
       Row() {
-        Text('🌱 派活儿')
+        Image($r('app.media.ic_inbox_active'))
+          .width(16).height(16).margin({ right: 4 })
+        Text('派活儿')
           .fontSize(14).fontWeight(FontWeight.Bold).fontColor('#212121')
         Blank()
         if (!this.empty && this.count > 0) {
@@ -23,6 +25,7 @@ struct WidgetCard {
         }
       }
       .width('100%')
+      .alignItems(VerticalAlign.Center)
 
       if (this.empty) {
         Column() {

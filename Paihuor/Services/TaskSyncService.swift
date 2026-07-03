@@ -367,6 +367,10 @@ private struct RelayTaskDTO: Codable {
         let updatedAtMilliseconds = updatedAt
             ?? fallback?.updatedAt.epochMilliseconds
             ?? createdAtMilliseconds
+        let archivedTimestamp = archivedAt ?? fallback?.archivedAt
+        let deletedTimestamp = deletedAt ?? fallback?.deletedAt
+        let isArchived = archived ?? fallback?.archived ?? (archivedTimestamp ?? 0) > 0
+        let isDeleted = deleted ?? fallback?.deleted ?? (deletedTimestamp ?? 0) > 0
 
         return PaihuorTask(
             objectId: objectId ?? fallback?.objectId ?? UUID().uuidString,
@@ -384,11 +388,11 @@ private struct RelayTaskDTO: Codable {
             negotiation: negotiation?.map { $0.message() } ?? fallback?.negotiation ?? [],
             receivedAt: receivedAt ?? fallback?.receivedAt ?? 0,
             doneAt: doneAt ?? fallback?.doneAt ?? 0,
-            archived: archived ?? fallback?.archived ?? false,
-            deleted: deleted ?? fallback?.deleted ?? false,
-            archivedAt: archivedAt ?? fallback?.archivedAt,
+            archived: isArchived,
+            deleted: isDeleted,
+            archivedAt: isArchived && (archivedTimestamp ?? 0) == 0 ? updatedAtMilliseconds : archivedTimestamp,
             archivedBy: archivedBy ?? fallback?.archivedBy,
-            deletedAt: deletedAt ?? fallback?.deletedAt,
+            deletedAt: isDeleted && (deletedTimestamp ?? 0) == 0 ? updatedAtMilliseconds : deletedTimestamp,
             deletedBy: deletedBy ?? fallback?.deletedBy
         )
     }

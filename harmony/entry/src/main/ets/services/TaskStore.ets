@@ -57,13 +57,13 @@ export class TaskStore {
 
   // 活跃任务（未归档）：主列表用
   getActive(): TaskItem[] {
-    return this.tasks.filter((t: TaskItem) => !t.archived)
+    return this.tasks.filter((t: TaskItem) => !t.archived && !t.deleted)
       .sort((a: TaskItem, b: TaskItem) => b.createdAt - a.createdAt);
   }
 
   // 已归档任务：归档区用（最近完成的在前）
   getArchived(): TaskItem[] {
-    return this.tasks.filter((t: TaskItem) => t.archived)
+    return this.tasks.filter((t: TaskItem) => t.archived && !t.deleted)
       .sort((a: TaskItem, b: TaskItem) => (b.doneAt || b.updatedAt) - (a.doneAt || a.updatedAt));
   }
 
@@ -95,6 +95,7 @@ export class TaskStore {
       if (!s.objectId || s.objectId.length === 0) {
         continue;
       }
+      this.fixTask(s);
       const idx = this.tasks.findIndex((t: TaskItem) => t.objectId === s.objectId);
       // 远端软删：本地移除，并回收其提醒 id 交调用方撤销
       if (s.deleted === true) {
@@ -144,6 +145,24 @@ export class TaskStore {
     }
     if (typeof s.deleted !== 'boolean') {
       s.deleted = false;
+    }
+    if (typeof s.archivedAt !== 'number') {
+      s.archivedAt = 0;
+    }
+    if (typeof s.archivedBy !== 'string') {
+      s.archivedBy = '';
+    }
+    if (typeof s.deletedAt !== 'number') {
+      s.deletedAt = 0;
+    }
+    if (typeof s.deletedBy !== 'string') {
+      s.deletedBy = '';
+    }
+    if (s.archivedAt > 0) {
+      s.archived = true;
+    }
+    if (s.deletedAt > 0) {
+      s.deleted = true;
     }
   }
 

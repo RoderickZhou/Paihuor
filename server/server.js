@@ -64,6 +64,10 @@ db.exec(`
   try { db.exec('ALTER TABLE tasks ADD COLUMN ' + col); } catch (e) {}
 });
 
+// 兼容 iOS 早期只写 archivedAt/deletedAt、Harmony 只读 archived/deleted 的数据。
+try { db.exec('UPDATE tasks SET archived=1 WHERE archivedAt > 0'); } catch (e) {}
+try { db.exec('UPDATE tasks SET deleted=1 WHERE deletedAt > 0'); } catch (e) {}
+
 // 标量字段列表（真实列），其余 reminder/negotiation 为 JSON 列
 const SCALAR = ['id','familyId','fromUserId','toUserId','rawText','title','detail',
   'deadline','status','archived','deleted','receivedAt','doneAt','createdAt','updatedAt',
@@ -102,17 +106,30 @@ function insertTask(t) {
     t.rawText || '', t.title || '', t.detail || '', Number(t.deadline) || 0,
     t.status || 'pending',
     JSON.stringify(t.reminder || {}), JSON.stringify(t.negotiation || []),
-    t.archived ? 1 : 0, t.deleted ? 1 : 0,
+    (t.archived || Number(t.archivedAt) > 0) ? 1 : 0,
+    (t.deleted || Number(t.deletedAt) > 0) ? 1 : 0,
     Number(t.receivedAt) || 0, Number(t.doneAt) || 0,
     Number(t.createdAt) || 0, Number(t.updatedAt) || 0,
     Number(t.archivedAt) || 0, t.archivedBy || '', Number(t.deletedAt) || 0, t.deletedBy || ''
   );
 }
 
+function normalizeAuditFlags(patch) {
+  const normalized = { ...patch };
+  if (normalized.archived === undefined && normalized.archivedAt !== undefined) {
+    normalized.archived = Number(normalized.archivedAt) > 0;
+  }
+  if (normalized.deleted === undefined && normalized.deletedAt !== undefined) {
+    normalized.deleted = Number(normalized.deletedAt) > 0;
+  }
+  return normalized;
+}
+
 // 用 patch 的字段做"浅合并"更新（等价于旧 Object.assign），刷新 updatedAt
 function patchTask(objectId, patch) {
   const cur = getTask(objectId);
   if (!cur) return null;
+  patch = normalizeAuditFlags(patch);
   const sets = []; const vals = [];
   for (const k of Object.keys(patch)) {
     if (k === 'objectId' || k === 'updatedAt') continue;

@@ -18,7 +18,7 @@ iOS 若要和鸿蒙互通（含商量），必须改为对接这套**中继 REST
 | GET | `/health` | 返回 `{"ok":true}`，无需 key。用于「LAN 探测优先、否则走公网」。 |
 | POST | `/tasks` | body=完整 task JSON。**服务端**分配 `objectId`(UUID)、`createdAt`、`updatedAt`(epoch ms)，并对 `toUserId` 的**鸿蒙**设备发推送；返回保存后的 task（含 objectId）。 |
 | POST | `/tasks/:objectId` | body=patch 对象（浅合并）+ 刷新 `updatedAt`；返回更新后的 task。找不到返回 404。可 patch `archived`/`title`/`detail`/`deadline`/`status`/`negotiation` 等。 |
-| DELETE | `/tasks/:objectId` | **软删**：置 `deleted=true` + 刷新 `updatedAt`（这样对端轮询能拿到墓碑并本地移除）。`?hard=1` 为物理删（管理台用）。 |
+| DELETE | `/tasks/:objectId?by=<userId>` | **软删**：置 `deleted=true`、记录 `deletedBy` + 刷新 `updatedAt`（这样对端轮询能拿到墓碑并本地移除）。`?hard=1` 为物理删（管理台用）。 |
 | GET | `/tasks?familyId=<>&since=<ms>` | 返回该 familyId 下 `updatedAt > since` 的 task 数组（增量轮询），**含已归档与已软删(墓碑)行**，客户端据 `archived`/`deleted` 自行处理。 |
 | POST | `/devices` | body=`{familyId,userId,platform,pushToken}` 注册推送 token。 |
 
@@ -111,6 +111,6 @@ APNs 是后续工作；先靠前台 8s 轮询。`POST /devices` iOS 可注册(pl
 | deleted | Bool | 软删墓碑。客户端轮询见到 `deleted=true` 即**本地移除**该任务（并撤销其本地提醒）。默认 false。 |
 | createdAt / updatedAt | Number(ms) | 服务端维护；updatedAt 用于增量轮询 since |
 
-> iOS 2026-06-28 状态：已补 `archived` / `deleted` 解码与发送；轮询已带 `caps=v2`；删除已改调 `DELETE /tasks/:objectId` 软删；仅新建方可删除。当前 iPhone 端按单向派发阶段隐藏接收方分栏，归档区保留。
+> iOS 2026-06-28 状态：已补 `archived` / `deleted` 解码与发送；轮询已带 `caps=v2`；删除已改调 `DELETE /tasks/:objectId?by=<userId>` 软删；仅新建方可删除。当前 iPhone 端按单向派发阶段隐藏接收方分栏，归档区保留。
 
 > 注：`CONTRACT.md` 的「LeanCloud Class」「MiniMax model=M2.7」等为早期约定，现以本文件 + `INTEROP.md` 2026-06-27 条为准。

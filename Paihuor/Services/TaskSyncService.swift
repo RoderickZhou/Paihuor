@@ -174,7 +174,15 @@ actor PaihuorRelayTaskSyncService: TaskSyncServicing {
     }
 
     func deleteTask(_ task: PaihuorTask, for profile: FamilyProfile) async throws -> PaihuorTask {
-        let data = try await send(method: "DELETE", url: await endpoint("tasks", task.objectId))
+        var url = await endpoint("tasks", task.objectId)
+        if var components = URLComponents(url: url, resolvingAgainstBaseURL: false) {
+            components.queryItems = [
+                URLQueryItem(name: "by", value: profile.userId.rawValue)
+            ]
+            url = components.url ?? url
+        }
+
+        let data = try await send(method: "DELETE", url: url)
         return try decoder.decode(RelayTaskDTO.self, from: data).task(fallback: task)
     }
 

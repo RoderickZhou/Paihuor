@@ -64,10 +64,10 @@
 - `GET /tasks?familyId=<familyId>&since=<epochMs>&caps=v2`：返回当前家庭 `updatedAt > since` 的任务数组，含归档与软删墓碑
 - `POST /tasks`：创建任务，body 使用 Task 字段；服务端返回最终任务，并可能生成新的 `objectId`
 - `POST /tasks/{objectId}`：更新任务，body 使用 Task 字段，可用于 `status`、`receivedAt`、`doneAt`、`negotiation`、`archivedAt`、`deletedAt` 等状态变化
-- `DELETE /tasks/{objectId}`：默认软删，服务端置 `deleted=true` 并刷新 `updatedAt`；`?hard=1` 为管理台物理删除
+- `DELETE /tasks/{objectId}?by=<userId>`：默认软删，服务端置 `deleted=true`、记录 `deletedBy` 并刷新 `updatedAt`；`?hard=1` 为管理台物理删除
 - `POST /devices`：注册设备推送 token
 
-用户主动删除自己发起的任务时，客户端调用 `DELETE /tasks/{objectId}` 做软删除；两端拉取到 `deleted=true` 后应从日常任务列表隐藏。`deletedAt` / `deletedBy` 是 iOS 兼容字段，服务端当前以 `deleted` 墓碑为准。
+用户主动删除自己发起的任务时，客户端调用 `DELETE /tasks/{objectId}?by=<userId>` 做软删除；两端拉取到 `deleted=true` 后应从日常任务列表隐藏。`deletedAt` / `deletedBy` 是跨端审计字段，服务端以 `deleted` 墓碑为准。
 
 归档策略：客户端不要用删除来清理完成记录。服务端归档标志为 `archived=true`；iOS 同时兼容 `archivedAt` / `archivedBy`，完成超过 24 小时也会视图归档。两端拉取任务时仍保留归档记录，再由客户端分栏展示。
 

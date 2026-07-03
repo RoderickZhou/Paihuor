@@ -3,9 +3,9 @@
 //            GET /tasks?familyId=&since=   (incremental; includes archived & deleted tombstones so flags propagate)
 // Devices  : POST /devices ({familyId,userId,platform,pushToken})
 // Admin    : GET /admin (web CRUD page), GET /admin/list (all rows, key-gated)
-// Debug    : POST /push-test ({familyId,userId,title,body})
+// Debug    : POST /push-test ({familyId,userId,title,body,fromUserId})
 // Auth     : header x-paihuor-key must equal env PAIHUOR_KEY (except /health and GET /admin html shell).
-// Push env : HW_CLIENT_ID, HW_CLIENT_SECRET, HW_PROJECT_ID (HarmonyOS NEXT v3 push).
+// Push env : HW_PROJECT_ID plus HW_SERVICE_ACCOUNT_FILE or HW_SERVICE_ACCOUNT_JSON (HarmonyOS NEXT v3 push).
 const http = require('http');
 const https = require('https');
 const fs = require('fs');
@@ -21,9 +21,12 @@ const LEGACY_TASKS = path.join(DIR, 'tasks.json');
 const LEGACY_DEVICES = path.join(DIR, 'devices.json');
 const TOMBSTONE_TTL = 30 * 24 * 3600 * 1000; // 软删墓碑保留 30 天后清理（低频App，给离线端足够同步窗口）
 
-const HW_CLIENT_ID = process.env.HW_CLIENT_ID || '';
-const HW_CLIENT_SECRET = process.env.HW_CLIENT_SECRET || '';
 const HW_PROJECT_ID = process.env.HW_PROJECT_ID || '';
+const HW_SERVICE_ACCOUNT_FILE = process.env.HW_SERVICE_ACCOUNT_FILE || path.join(DIR, 'hw-service-account.json');
+const HW_SERVICE_ACCOUNT_JSON = process.env.HW_SERVICE_ACCOUNT_JSON || '';
+const HW_ENABLE_EXTENDED_PUSH = process.env.HW_ENABLE_EXTENDED_PUSH === '1';
+const HW_TEST_MESSAGE = process.env.HW_TEST_MESSAGE !== '0';
+const HW_NOTIFICATION_CATEGORY = process.env.HW_NOTIFICATION_CATEGORY || 'WORK';
 
 // ---------------- DB ----------------
 const db = new DatabaseSync(DB_FILE);
@@ -232,34 +235,139 @@ function httpsPost(host, pathName, headers, bodyStr) {
     req.end();
   });
 }
-let hwToken = null; let hwTokenExp = 0;
-async function getHwToken() {
-  if (hwToken && Date.now() < hwTokenExp - 60000) return hwToken;
-  const body = 'grant_type=client_credentials&client_id=' + encodeURIComponent(HW_CLIENT_ID)
-    + '&client_secret=' + encodeURIComponent(HW_CLIENT_SECRET);
-  const r = await httpsPost('oauth-login.cloud.huawei.com', '/oauth2/v3/token', {
-    'Content-Type': 'application/x-www-form-urlencoded', 'Content-Length': Buffer.byteLength(body)
-  }, body);
-  const data = JSON.parse(r.body);
-  if (!data.access_token) throw new Error('oauth fail: ' + r.body);
-  hwToken = data.access_token;
-  hwTokenExp = Date.now() + (data.expires_in || 3600) * 1000;
-  return hwToken;
+let serviceAccount = null;
+function loadServiceAccount() {
+  if (serviceAccount) return serviceAccount;
+  let raw = HW_SERVICE_ACCOUNT_JSON;
+  if (!raw && fs.existsSync(HW_SERVICE_ACCOUNT_FILE)) {
+    raw = fs.readFileSync(HW_SERVICE_ACCOUNT_FILE, 'utf8');
+  }
+  if (!raw) {
+    throw new Error('Huawei service account missing: set HW_SERVICE_ACCOUNT_FILE or HW_SERVICE_ACCOUNT_JSON');
+  }
+  serviceAccount = JSON.parse(raw);
+  const missing = ['key_id', 'sub_account', 'private_key'].filter((k) => !serviceAccount[k]);
+  if (missing.length) throw new Error('Huawei service account missing fields: ' + missing.join(','));
+  return serviceAccount;
 }
-async function pushToTokens(tokens, title, content) {
-  if (!HW_CLIENT_ID || !HW_PROJECT_ID) { console.log('push skipped: no HW env'); return null; }
-  if (!tokens || tokens.length === 0) { console.log('push skipped: no tokens'); return null; }
-  const at = await getHwToken();
+
+function base64url(input) {
+  return Buffer.from(input).toString('base64').replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
+}
+
+let hwJwt = null; let hwJwtExp = 0;
+function getHwJwt() {
+  const now = Math.floor(Date.now() / 1000);
+  if (hwJwt && now < hwJwtExp - 60) return hwJwt;
+  const sa = loadServiceAccount();
+  const exp = now + 3600;
+  const header = { alg: 'PS256', typ: 'JWT', kid: sa.key_id };
+  const payload = {
+    iss: sa.sub_account,
+    sub: sa.sub_account,
+    aud: 'https://push-api.cloud.huawei.com',
+    iat: now,
+    exp,
+    project_id: HW_PROJECT_ID
+  };
+  const signingInput = base64url(JSON.stringify(header)) + '.' + base64url(JSON.stringify(payload));
+  const sig = crypto.sign('sha256', Buffer.from(signingInput), {
+    key: sa.private_key,
+    padding: crypto.constants.RSA_PKCS1_PSS_PADDING,
+    saltLength: crypto.constants.RSA_PSS_SALTLEN_DIGEST
+  });
+  hwJwt = signingInput + '.' + base64url(sig);
+  hwJwtExp = exp;
+  return hwJwt;
+}
+function displayName(userId) {
+  if (userId === 'wife') return '老婆';
+  if (userId === 'husband') return '老公';
+  return userId || '';
+}
+
+function buildRemoteNotificationData(task, content) {
+  const taskTitle = task && (task.title || task.rawText) ? (task.title || task.rawText) : '';
+  return JSON.stringify({
+    title: taskTitle,
+    text: content,
+    fromName: displayName(task && task.fromUserId),
+    objectId: task && task.objectId ? task.objectId : '',
+    familyId: task && task.familyId ? task.familyId : '',
+    fromUserId: task && task.fromUserId ? task.fromUserId : '',
+    toUserId: task && task.toUserId ? task.toUserId : '',
+    setBadgeNumber: 1,
+    badgeNumber: 1
+  });
+}
+
+function buildAlertPayload(title, content) {
+  return {
+    notification: {
+      category: HW_NOTIFICATION_CATEGORY,
+      title,
+      body: content,
+      clickAction: { actionType: 0 },
+      foregroundShow: true,
+      badge: { addNum: 1 }
+    }
+  };
+}
+
+function buildExtendedNotificationPayload(title, content, extraData) {
+  const payload = {
+    extraData,
+    notification: {
+      category: 'EXPRESS',
+      title,
+      body: content,
+      clickAction: { actionType: 0 }
+    }
+  };
+  return payload;
+}
+
+async function sendHuaweiPush(accessToken, tokens, pushType, payloadBody) {
   const payload = JSON.stringify({
-    payload: { notification: { category: 'IM', title, body: content, clickAction: { actionType: 0 } } },
-    target: { token: tokens }, pushOptions: { ttl: 86400 }
+    payload: payloadBody,
+    target: { token: tokens },
+    pushOptions: { ttl: 86400, testMessage: HW_TEST_MESSAGE }
   });
   const r = await httpsPost('push-api.cloud.huawei.com', '/v3/' + HW_PROJECT_ID + '/messages:send', {
-    'Content-Type': 'application/json', 'Authorization': 'Bearer ' + at,
-    'push-type': '0', 'Content-Length': Buffer.byteLength(payload)
+    'Content-Type': 'application/json',
+    'Authorization': 'Bearer ' + accessToken,
+    'push-type': pushType,
+    'Content-Length': Buffer.byteLength(payload)
   }, payload);
-  console.log('push result:', r.status, r.body);
-  return r.body;
+  console.log('push result:', pushType, r.status, r.body);
+  return r;
+}
+
+function isHuaweiPushAccepted(r) {
+  if (!r || r.status < 200 || r.status >= 300) return false;
+  try {
+    const data = JSON.parse(r.body || '{}');
+    if (data.code === undefined) return true;
+    return String(data.code) === '80000000' || /success/i.test(data.msg || data.message || '');
+  } catch (e) {
+    return true;
+  }
+}
+
+async function pushToTokens(tokens, title, content, task) {
+  if (!HW_PROJECT_ID) { console.log('push skipped: no HW_PROJECT_ID'); return null; }
+  if (!tokens || tokens.length === 0) { console.log('push skipped: no tokens'); return null; }
+  const at = getHwJwt();
+  if (HW_ENABLE_EXTENDED_PUSH) {
+    const remoteData = buildRemoteNotificationData(task, content);
+    const remotePayload = buildExtendedNotificationPayload(title, content, remoteData);
+    const remote = await sendHuaweiPush(at, tokens, '2', remotePayload);
+    if (isHuaweiPushAccepted(remote)) return remote.body;
+    console.log('remote notification push failed, falling back to normal notification');
+  }
+  const normalPayload = buildAlertPayload(title, content);
+  const normal = await sendHuaweiPush(at, tokens, '0', normalPayload);
+  return normal.body;
 }
 function notifyRecipient(task) {
   try {
@@ -268,7 +376,7 @@ function notifyRecipient(task) {
       .all(task.familyId, task.toUserId).map((d) => d.pushToken);
     if (toks.length === 0) return;
     const content = '新任务：' + (task.title || task.rawText || '有一条新任务');
-    pushToTokens(toks, '派活儿', content).catch((e) => console.log('push err:', e.message));
+    pushToTokens(toks, '派活儿', content, task).catch((e) => console.log('push err:', e.message));
   } catch (e) { console.log('notify err:', e.message); }
 }
 
@@ -355,7 +463,15 @@ const server = http.createServer(async (req, res) => {
     const toks = db.prepare(`SELECT pushToken FROM devices WHERE familyId=? AND userId=? AND pushToken<>''`)
       .all(b.familyId || '', b.userId || '').map((d) => d.pushToken);
     try {
-      const result = await pushToTokens(toks, b.title || '派活儿', b.body || '这是一条测试推送');
+      const testTask = {
+        objectId: b.objectId || 'push-test',
+        familyId: b.familyId || '',
+        fromUserId: b.fromUserId || '',
+        toUserId: b.userId || '',
+        title: b.title || '',
+        rawText: b.body || ''
+      };
+      const result = await pushToTokens(toks, b.title || '派活儿', b.body || '这是一条测试推送', testTask);
       return send(res, 200, { sent: toks.length, result });
     } catch (e) { return send(res, 500, { error: e.message }); }
   }

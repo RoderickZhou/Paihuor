@@ -51,10 +51,10 @@ Paihuor Relay 当前接口为自建 Node 中继 REST：
 - `GET /tasks?familyId=<familyId>&since=<epochMs>&caps=v2`：按 `updatedAt` 增量拉取家庭任务，含归档与软删墓碑，iOS 再过滤当前用户相关任务
 - `POST /tasks`：创建任务，使用服务端返回的 `objectId`
 - `POST /tasks/{objectId}`：更新任务状态、商量记录、归档等字段；对象/数组字段需整段写回
-- `DELETE /tasks/{objectId}`：软删除任务，服务端写入 `deleted=true` 墓碑并刷新 `updatedAt`
+- `DELETE /tasks/{objectId}?by=<userId>`：软删除任务，服务端写入 `deleted=true`、`deletedBy` 墓碑并刷新 `updatedAt`
 - `POST /devices`：注册推送 token；iOS 暂无 APNs，可后续接入
 
-注意：“清空本机任务”只清本地缓存，不会删除服务端任务。用户删除自己发起的任务时，iOS 调用 `DELETE /tasks/{objectId}` 做软删除；已完成任务点“归档”时写入 `archived=true`，并兼容本地 `archivedAt` / `archivedBy` 字段，数据库记录继续保留。
+注意：“清空本机任务”只清本地缓存，不会删除服务端任务。用户删除自己发起的任务时，iOS 调用 `DELETE /tasks/{objectId}?by=<userId>` 做软删除；已完成任务点“归档”时写入 `archived=true`，并兼容本地 `archivedAt` / `archivedBy` 字段，数据库记录继续保留。
 
 当前中继只给鸿蒙端发华为 Push。iOS 为了先跑通互通，任务页可见且 App 在前台时每 8 秒静默拉取一次；退后台或切到设置页时停止。后续可由服务端补 APNs，再替换同步实现。
 

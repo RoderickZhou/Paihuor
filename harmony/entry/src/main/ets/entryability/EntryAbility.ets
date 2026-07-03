@@ -1,8 +1,6 @@
 import { AbilityConstant, ConfigurationConstant, UIAbility, Want } from '@kit.AbilityKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { window } from '@kit.ArkUI';
-import { pushService } from '@kit.PushKit';
-import { BusinessError } from '@kit.BasicServicesKit';
 import { TaskStore } from '../services/TaskStore';
 import { DeviceService } from '../services/DeviceService';
 
@@ -18,25 +16,12 @@ export default class EntryAbility extends UIAbility {
     // 启动即初始化本地任务存储
     TaskStore.getInstance().init(this.context);
     // 取华为 Push Token 并注册到中继（关闭态收推送的基础）
-    this.initPush();
+    DeviceService.getInstance().ensureRegisteredToken();
     // 点击通知冷启动：参数在 want.parameters
     if (want.parameters) {
       hilog.info(DOMAIN, 'PushKit', 'cold start params: %{public}s', JSON.stringify(want.parameters));
     }
     hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onCreate');
-  }
-
-  // 取 Push Token 并上报；失败仅记录，不影响启动
-  private async initPush(): Promise<void> {
-    try {
-      const token: string = await pushService.getToken();
-      hilog.info(DOMAIN, 'PushKit', 'pushToken=%{public}s', token);
-      await DeviceService.getInstance().registerToken(token);
-    } catch (err) {
-      const e = err as BusinessError;
-      hilog.error(DOMAIN, 'PushKit', 'getToken fail: %{public}d %{public}s', e.code, e.message);
-      // 1000900010=应用身份校验失败(client_id/指纹/未开通Push/未到生效期)
-    }
   }
 
   // 点击通知热启动（launchType=singleton 才可靠触发）
@@ -71,6 +56,7 @@ export default class EntryAbility extends UIAbility {
   onForeground(): void {
     // Ability has brought to foreground
     hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onForeground');
+    DeviceService.getInstance().ensureRegisteredToken();
   }
 
   onBackground(): void {

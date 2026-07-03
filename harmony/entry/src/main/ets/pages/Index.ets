@@ -7,6 +7,7 @@ import { AIService } from '../services/AIService';
 import { ReminderService } from '../services/ReminderService';
 import { RelayService } from '../services/RelayService';
 import { NotificationService } from '../services/NotificationService';
+import { DeviceService } from '../services/DeviceService';
 import { updateAllCards } from '../services/WidgetCardData';
 import { AppConfig } from '../config/AppConfig';
 
@@ -42,22 +43,31 @@ struct Index {
   @State editTitle: string = '';
   @State editDetail: string = '';
   @State editDeadline: number = 0;
+  // 任务详情半屏
+  @State showDetail: boolean = false;
+  @State detailTaskId: string = '';
   private lastSync: number = 0;
   private pollTimer: number = -1;
+  private sessionStartedAt: number = Date.now();
+  private notifiedObjectIds: string[] = [];
   private firstPollDone: boolean = false; // 首轮只建立基线，不弹通知，避免启动刷屏
 
   async aboutToAppear(): Promise<void> {
     await TaskStore.getInstance().whenReady();
-    this.refresh();
-    this.startPolling();
-    AsrService.getInstance().prewarm();
     // 申请通知权限（角标/横幅需要）
     try {
       const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
-      await NotificationService.getInstance().requestEnable(ctx);
+      const enabled = await NotificationService.getInstance().ensureEnabled(ctx);
+      if (!enabled) {
+        this.toast('请允许通知，否则新任务不会弹窗');
+      }
     } catch (err) {
       // 忽略
     }
+    this.refresh();
+    this.startPolling();
+    DeviceService.getInstance().ensureRegisteredToken();
+    AsrService.getInstance().prewarm();
   }
 
   aboutToDisappear(): void {
@@ -137,17 +147,18 @@ struct Index {
       await ReminderService.getInstance().cancelForTask(orphan);
     }
     this.refresh();
-    // 新到的、派给我的、未读(pending)活 → 弹本地通知（首轮只建基线、不弹，避免启动刷屏）
-    if (this.firstPollDone) {
-      const after = TaskStore.getInstance().getAll();
-      for (let i = 0; i < after.length; i++) {
-        const t = after[i];
-        if (beforeIds.indexOf(t.objectId) < 0
-          && t.toUserId === AppConfig.MY_USER_ID
-          && t.status === TaskStatus.PENDING
-          && !t.archived && !t.deleted) {
-          await NotificationService.getInstance().notifyNewTask(this.displayName(t.fromUserId), t.title);
-        }
+    // 新到的、派给我的、未读(pending)活 → 弹本地通知。
+    // 首轮只压住很老的历史待办；最近新到的任务仍然提醒，避免首次同步只出现角标不弹窗。
+    const after = TaskStore.getInstance().getAll();
+    for (let i = 0; i < after.length; i++) {
+      const t = after[i];
+      const notifyKey = t.objectId.length > 0 ? t.objectId : t.id;
+      if (beforeIds.indexOf(t.objectId) < 0
+        && this.notifiedObjectIds.indexOf(notifyKey) < 0
+        && this.shouldNotifyNewTask(t)
+        && this.canNotifyOnThisPoll(t)) {
+        await NotificationService.getInstance().notifyNewTask(this.displayName(t.fromUserId), t.title);
+        this.notifiedObjectIds.push(notifyKey);
       }
     }
     this.firstPollDone = true;
@@ -155,6 +166,21 @@ struct Index {
     if (this.showNegotiate) {
       this.reloadNeg();
     }
+  }
+
+  private shouldNotifyNewTask(t: TaskItem): boolean {
+    return t.toUserId === AppConfig.MY_USER_ID
+      && t.status === TaskStatus.PENDING
+      && !t.archived
+      && !t.deleted;
+  }
+
+  private canNotifyOnThisPoll(t: TaskItem): boolean {
+    if (this.firstPollDone) {
+      return true;
+    }
+    const recentCutoff = this.sessionStartedAt - 10 * 60 * 1000;
+    return t.createdAt >= recentCutoff || t.updatedAt >= recentCutoff;
   }
 
   // 把本机的状态变更推到中继（供对方同步）
@@ -173,12 +199,14 @@ struct Index {
   build() {
     Stack({ alignContent: Alignment.BottomEnd }) {
       Column() {
-        // 顶部标题 + 归档入口
+        // 顶部标题 + 快捷入口
         Row() {
-          Text('派活儿')
-            .fontSize(24)
+          this.TopCircleIcon('☰')
+          Text('收集箱')
+            .fontSize(32)
             .fontWeight(FontWeight.Bold)
             .fontColor(Constants.COLOR_TEXT_PRIMARY)
+            .margin({ left: 14 })
           Blank()
           if (this.doneUnarchivedCount > 0) {
             Text('归档已完成')
@@ -187,14 +215,10 @@ struct Index {
               .margin({ right: 8 })
               .onClick(() => { this.onArchiveAllDone(); })
           }
-          Text('归档 ' + this.archivedCount)
-            .fontSize(13).fontColor(Constants.COLOR_TEXT_SECONDARY)
-            .padding({ left: 10, right: 10, top: 5, bottom: 5 })
-            .backgroundColor(Constants.COLOR_CARD_BG).borderRadius(8)
-            .onClick(() => { this.openArchive(); })
+          this.TopCircleIcon('▦')
         }
         .width('100%')
-        .padding({ left: 20, right: 16, top: 16, bottom: 8 })
+        .padding({ left: 24, right: 24, top: 16, bottom: 14 })
 
         if (this.tasks.length === 0) {
           Column() {
@@ -216,7 +240,7 @@ struct Index {
           }
           .width('100%')
           .layoutWeight(1)
-          .padding({ left: 16, right: 16, top: 4, bottom: 100 })
+          .padding({ left: 18, right: 18, top: 4, bottom: 132 })
           .scrollBar(BarState.Off)
         }
       }
@@ -224,19 +248,25 @@ struct Index {
       .height('100%')
       .backgroundColor(Constants.COLOR_BG)
 
+      this.BottomDock()
+
       // 右下角悬浮「＋」
       Button() {
-        Text('＋').fontSize(30).fontColor(Color.White)
+        Text('＋').fontSize(34).fontColor(Color.White)
       }
-      .width(60)
-      .height(60)
-      .borderRadius(30)
+      .width(66)
+      .height(66)
+      .borderRadius(33)
       .backgroundColor(Constants.COLOR_PRIMARY)
-      .margin({ right: 24, bottom: 32 })
-      .shadow({ radius: 12, color: '#33000000', offsetY: 4 })
+      .margin({ right: 30, bottom: 106 })
+      .shadow({ radius: 14, color: '#33477CFF', offsetY: 8 })
       .onClick(() => {
         this.openCreate();
       })
+
+      if (this.showDetail) {
+        this.TaskDetailSheet(this.currentDetailTask())
+      }
 
       if (this.showCreate) {
         this.CreateSheet()
@@ -256,6 +286,58 @@ struct Index {
     }
     .width('100%')
     .height('100%')
+  }
+
+  @Builder
+  TopCircleIcon(label: string) {
+    Text(label)
+      .fontSize(22)
+      .fontWeight(FontWeight.Bold)
+      .fontColor(Constants.COLOR_TEXT_PRIMARY)
+      .width(52)
+      .height(52)
+      .textAlign(TextAlign.Center)
+      .backgroundColor('#CCFFFFFF')
+      .borderRadius(26)
+      .shadow({ radius: 10, color: '#11000000', offsetY: 4 })
+      .onClick(() => {
+        if (label === '▦') {
+          this.openArchive();
+        }
+      })
+  }
+
+  @Builder
+  BottomDock() {
+    Row() {
+      Stack() {
+        Column()
+          .width(40).height(40)
+          .borderRadius(20)
+          .backgroundColor(Constants.COLOR_PRIMARY_LIGHT)
+        Image($r('app.media.ic_inbox_active'))
+          .width(28).height(28)
+      }
+      .width(44).height(44)
+      .margin({ right: 42 })
+
+      Image($r('app.media.ic_archive'))
+        .width(28).height(28)
+        .margin({ right: 42 })
+        .onClick(() => { this.openArchive(); })
+
+      Image($r('app.media.ic_refresh'))
+        .width(28).height(28)
+        .onClick(() => { this.poll(); this.refresh(); })
+    }
+    .width(324)
+    .height(68)
+    .justifyContent(FlexAlign.Center)
+    .padding({ left: 22, right: 22 })
+    .backgroundColor('#E6FFFFFF')
+    .borderRadius(34)
+    .shadow({ radius: 18, color: '#22000000', offsetY: 8 })
+    .margin({ left: 54, right: 54, bottom: 22 })
   }
 
   // 滴答清单风格卡片：左方形勾选框(点击推进状态) + 标题 + 截止(⏰,按紧急度变色) + 来源·状态。
@@ -298,16 +380,14 @@ struct Index {
       .layoutWeight(1)
       .alignItems(HorizontalAlign.Start)
       .onClick(() => {
-        if (this.isCreator(item) && !item.archived) {
-          this.openEdit(item);
-        }
+        this.openDetail(item);
       })
     }
     .width('100%')
     .padding(14)
     .backgroundColor(Constants.COLOR_CARD_BG)
-    .borderRadius(12)
-    .shadow({ radius: 6, color: '#11000000', offsetY: 2 })
+    .borderRadius(8)
+    .shadow({ radius: 8, color: '#0D000000', offsetY: 3 })
     .alignItems(VerticalAlign.Top)
     .opacity(item.archived ? 0.7 : 1)
   }
@@ -507,6 +587,230 @@ struct Index {
     .width('100%').padding(10).margin({ top: 10 })
     .backgroundColor(Constants.COLOR_BG).borderRadius(10)
     .alignItems(HorizontalAlign.Start)
+  }
+
+  @Builder
+  TaskDetailSheet(item: TaskItem) {
+    Column() {
+      Column().layoutWeight(1).width('100%')
+
+      Column() {
+        Row() {
+          Text('‹')
+            .fontSize(28)
+            .fontWeight(FontWeight.Bold)
+            .fontColor(Constants.COLOR_TEXT_SECONDARY)
+            .width(44)
+            .height(44)
+            .textAlign(TextAlign.Center)
+            .onClick(() => { this.closeDetail(); })
+
+          Blank()
+          Text('收集箱⌄')
+            .fontSize(18)
+            .fontWeight(FontWeight.Bold)
+            .fontColor(Constants.COLOR_TEXT_PRIMARY)
+          Blank()
+
+          Text('⋯')
+            .fontSize(26)
+            .fontWeight(FontWeight.Bold)
+            .fontColor(Constants.COLOR_TEXT_SECONDARY)
+            .width(44)
+            .height(44)
+            .textAlign(TextAlign.Center)
+            .onClick(() => {
+              if (this.isCreator(item) && !item.archived) {
+                this.closeDetail();
+                this.openEdit(item);
+              }
+            })
+        }
+        .width('100%')
+        .margin({ bottom: 12 })
+
+        Row() {
+          this.CheckBox(item)
+          Text(item.deadline > 0 ? Constants.formatDeadline(item.deadline) : '未设截止时间')
+            .fontSize(17)
+            .fontWeight(FontWeight.Bold)
+            .fontColor(item.deadline > 0 ? Constants.COLOR_PRIMARY : Constants.COLOR_TEXT_SECONDARY)
+          Blank()
+          Text('⚑')
+            .fontSize(20)
+            .fontColor(Constants.COLOR_TEXT_SECONDARY)
+        }
+        .width('100%')
+        .margin({ bottom: 20 })
+
+        Text(this.taskDisplayTitle(item))
+          .fontSize(30)
+          .fontWeight(FontWeight.Bold)
+          .fontColor(Constants.COLOR_TEXT_PRIMARY)
+          .maxLines(3)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+          .width('100%')
+          .margin({ bottom: 14 })
+
+        Text(this.taskDetailText(item).length > 0 ? this.taskDetailText(item) : '描述')
+          .fontSize(18)
+          .fontColor(this.taskDetailText(item).length > 0 ? Constants.COLOR_TEXT_SECONDARY : '#668F97A6')
+          .maxLines(6)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+          .width('100%')
+          .margin({ bottom: 18 })
+
+        if (item.negotiation.length > 0) {
+          this.DetailNegotiationBlock(item)
+        }
+
+        this.DetailActionRow(item)
+      }
+      .width('100%')
+      .padding({ left: 24, right: 24, top: 14, bottom: 22 })
+      .backgroundColor(Constants.COLOR_CARD_BG)
+      .borderRadius({ topLeft: 24, topRight: 24 })
+      .shadow({ radius: 18, color: '#22000000', offsetY: -6 })
+    }
+    .width('100%').height('100%')
+    .backgroundColor('#33000000')
+  }
+
+  @Builder
+  DetailNegotiationBlock(item: TaskItem) {
+    Column() {
+      Text(this.latestNegotiationIsMine(item) ? '我提出的商量' : '对方提出的商量')
+        .fontSize(12)
+        .fontWeight(FontWeight.Bold)
+        .fontColor(this.needsNegotiationReply(item) ? Constants.COLOR_WARNING : Constants.COLOR_TEXT_SECONDARY)
+        .width('100%')
+        .margin({ bottom: 8 })
+      Text(item.negotiation[item.negotiation.length - 1].text)
+        .fontSize(15)
+        .fontColor(Constants.COLOR_TEXT_PRIMARY)
+        .width('100%')
+      if (item.negotiation[item.negotiation.length - 1].proposedDeadline > 0) {
+        Text('建议改到 ' + Constants.formatDeadline(item.negotiation[item.negotiation.length - 1].proposedDeadline))
+          .fontSize(12)
+          .fontColor(Constants.COLOR_PRIMARY)
+          .width('100%')
+          .margin({ top: 8 })
+      }
+      if (this.needsNegotiationReply(item)) {
+        Row() {
+          Button('同意')
+            .type(ButtonType.Normal)
+            .fontSize(13)
+            .fontColor(Color.White)
+            .backgroundColor(Constants.COLOR_PRIMARY)
+            .height(34)
+            .borderRadius(8)
+            .padding({ left: 14, right: 14 })
+            .onClick(() => {
+              this.onAcceptDetailProposal(item);
+            })
+          Button('回复')
+            .type(ButtonType.Normal)
+            .fontSize(13)
+            .fontColor(Constants.COLOR_TEXT_PRIMARY)
+            .backgroundColor(Constants.COLOR_BG)
+            .height(34)
+            .borderRadius(8)
+            .padding({ left: 14, right: 14 })
+            .margin({ left: 10 })
+            .onClick(() => {
+              this.closeDetail();
+              this.openNegotiate(item);
+            })
+        }
+        .margin({ top: 10 })
+      }
+    }
+    .width('100%')
+    .padding(14)
+    .margin({ bottom: 16 })
+    .backgroundColor(this.needsNegotiationReply(item) ? '#1FFF9F1C' : Constants.COLOR_BG)
+    .borderRadius(8)
+    .alignItems(HorizontalAlign.Start)
+  }
+
+  @Builder
+  DetailActionRow(item: TaskItem) {
+    Row() {
+      if (this.isReceiver(item) && item.status === TaskStatus.PENDING) {
+        Button('收到')
+          .type(ButtonType.Normal)
+          .fontSize(14)
+          .fontWeight(FontWeight.Bold)
+          .fontColor(Color.White)
+          .backgroundColor(Constants.COLOR_PRIMARY)
+          .height(42)
+          .borderRadius(10)
+          .padding({ left: 16, right: 16 })
+          .margin({ right: 10 })
+          .onClick(() => { this.onReceive(item); })
+      } else if (this.isReceiver(item) && item.status === TaskStatus.RECEIVED) {
+        Button('完成')
+          .type(ButtonType.Normal)
+          .fontSize(14)
+          .fontWeight(FontWeight.Bold)
+          .fontColor(Color.White)
+          .backgroundColor(Constants.COLOR_PRIMARY)
+          .height(42)
+          .borderRadius(10)
+          .padding({ left: 16, right: 16 })
+          .margin({ right: 10 })
+          .onClick(() => { this.onDone(item); this.closeDetail(); })
+      }
+
+      if (!item.archived && item.status !== TaskStatus.DONE) {
+        Button(item.status === TaskStatus.NEGOTIATING ? '回复' : '商量')
+          .type(ButtonType.Normal)
+          .fontSize(14)
+          .fontWeight(FontWeight.Bold)
+          .fontColor(Constants.COLOR_TEXT_PRIMARY)
+          .backgroundColor(Constants.COLOR_BG)
+          .height(42)
+          .borderRadius(10)
+          .padding({ left: 16, right: 16 })
+          .margin({ right: 10 })
+          .onClick(() => {
+            this.closeDetail();
+            this.openNegotiate(item);
+          })
+      }
+
+      if (item.status === TaskStatus.DONE && !item.archived) {
+        Button('归档')
+          .type(ButtonType.Normal)
+          .fontSize(14)
+          .fontWeight(FontWeight.Bold)
+          .fontColor(Constants.COLOR_TEXT_PRIMARY)
+          .backgroundColor(Constants.COLOR_BG)
+          .height(42)
+          .borderRadius(10)
+          .padding({ left: 16, right: 16 })
+          .margin({ right: 10 })
+          .onClick(() => { this.onArchive(item); this.closeDetail(); })
+      }
+
+      Blank()
+
+      if (this.isCreator(item)) {
+        Button('删除')
+          .type(ButtonType.Normal)
+          .fontSize(14)
+          .fontWeight(FontWeight.Bold)
+          .fontColor(Constants.COLOR_DANGER)
+          .backgroundColor(Constants.COLOR_BG)
+          .height(42)
+          .borderRadius(10)
+          .padding({ left: 16, right: 16 })
+          .onClick(() => { this.onDelete(item); })
+      }
+    }
+    .width('100%')
+    .margin({ top: 4 })
   }
 
   @Builder
@@ -839,6 +1143,41 @@ struct Index {
     this.showCreate = true;
   }
 
+  openDetail(item: TaskItem): void {
+    this.detailTaskId = item.id;
+    this.showDetail = true;
+  }
+
+  closeDetail(): void {
+    this.showDetail = false;
+  }
+
+  private currentDetailTask(): TaskItem {
+    const item = TaskStore.getInstance().getById(this.detailTaskId);
+    if (item) {
+      return item;
+    }
+    return new TaskItem();
+  }
+
+  private taskDisplayTitle(item: TaskItem): string {
+    const title = item.title.trim();
+    if (title.length > 0) {
+      return title;
+    }
+    const raw = item.rawText.trim();
+    return raw.length > 0 ? raw : '未命名任务';
+  }
+
+  private taskDetailText(item: TaskItem): string {
+    const detail = item.detail.trim();
+    if (detail.length > 0) {
+      return detail;
+    }
+    const raw = item.rawText.trim();
+    return raw === this.taskDisplayTitle(item) ? '' : raw;
+  }
+
   async onSend(): Promise<void> {
     if (this.draftTitle.trim().length === 0) {
       this.toast('说点什么吧');
@@ -981,6 +1320,28 @@ struct Index {
     this.toast('已采纳新时间');
   }
 
+  async onAcceptDetailProposal(item: TaskItem): Promise<void> {
+    if (item.negotiation.length === 0) {
+      return;
+    }
+    const m = item.negotiation[item.negotiation.length - 1];
+    if (m.proposedDeadline <= 0) {
+      this.toast('这条商量没有新时间');
+      return;
+    }
+    item.deadline = m.proposedDeadline;
+    await TaskStore.getInstance().upsert(item);
+    this.refresh();
+    if (item.objectId.length > 0) {
+      const patch: Record<string, Object> = {
+        'deadline': item.deadline,
+        'negotiation': item.negotiation
+      };
+      await RelayService.getInstance().update(item.objectId, patch);
+    }
+    this.toast('已采纳新时间');
+  }
+
   // 把商量记录/状态/截止时间整体推到中继（数组整段覆盖，两人量级足够）
   private async pushNegotiation(item: TaskItem): Promise<void> {
     if (item.objectId.length === 0) {
@@ -1042,6 +1403,7 @@ struct Index {
       await RelayService.getInstance().remove(item.objectId, AppConfig.MY_USER_ID);
     }
     await TaskStore.getInstance().remove(item.id);
+    this.showDetail = false;
     this.refresh();
     if (this.showArchive) {
       this.archivedTasks = TaskStore.getInstance().getArchived();
@@ -1055,6 +1417,19 @@ struct Index {
 
   private isReceiver(item: TaskItem): boolean {
     return item.toUserId === AppConfig.MY_USER_ID;
+  }
+
+  private latestNegotiationIsMine(item: TaskItem): boolean {
+    if (item.negotiation.length === 0) {
+      return false;
+    }
+    return item.negotiation[item.negotiation.length - 1].fromUserId === AppConfig.MY_USER_ID;
+  }
+
+  private needsNegotiationReply(item: TaskItem): boolean {
+    return item.status === TaskStatus.NEGOTIATING
+      && item.negotiation.length > 0
+      && !this.latestNegotiationIsMine(item);
   }
 
   // 点方形框推进状态：仅接收方；待收到/商量中→收到，收到→完成(并自动归档)

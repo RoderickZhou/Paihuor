@@ -1,15 +1,15 @@
-// 全局常量 + 主题色 + 时间工具（薄荷绿主题沿用《归零》）
+// 全局常量 + 主题色 + 时间工具
 export class Constants {
-  // 主题色
-  static readonly COLOR_PRIMARY: string = '#4CAF50';
-  static readonly COLOR_PRIMARY_LIGHT: string = '#81C784';
-  static readonly COLOR_PRIMARY_DARK: string = '#388E3C';
-  static readonly COLOR_BG: string = '#F5F7F6';
+  // 与 iOS 端新图标保持一致的蓝色任务清单主题
+  static readonly COLOR_PRIMARY: string = '#477CFF';
+  static readonly COLOR_PRIMARY_LIGHT: string = '#DCE6FF';
+  static readonly COLOR_PRIMARY_DARK: string = '#2F63E6';
+  static readonly COLOR_BG: string = '#F3F6FF';
   static readonly COLOR_CARD_BG: string = '#FFFFFF';
-  static readonly COLOR_TEXT_PRIMARY: string = '#212121';
-  static readonly COLOR_TEXT_SECONDARY: string = '#9E9E9E';
-  static readonly COLOR_WARNING: string = '#FF9800';
-  static readonly COLOR_DANGER: string = '#F44336';
+  static readonly COLOR_TEXT_PRIMARY: string = '#17181C';
+  static readonly COLOR_TEXT_SECONDARY: string = '#8F97A6';
+  static readonly COLOR_WARNING: string = '#FF9F1C';
+  static readonly COLOR_DANGER: string = '#EF3340';
 
   // 本地存储
   static readonly PREF_NAME: string = 'paihuor_store';

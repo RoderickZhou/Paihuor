@@ -17,18 +17,35 @@ export class NotificationService {
     return NotificationService.instance;
   }
 
-  // 首次需用户允许通知，否则弹不出来
-  async requestEnable(ctx: common.UIAbilityContext): Promise<void> {
+  // 首次需用户允许通知，否则弹不出来。返回当前是否已允许通知。
+  async ensureEnabled(ctx: common.UIAbilityContext): Promise<boolean> {
+    try {
+      if (notificationManager.isNotificationEnabledSync()) {
+        return true;
+      }
+    } catch (err) {
+      hilog.warn(0x0000, TAG, 'isNotificationEnabled before request: ' + JSON.stringify(err));
+    }
     try {
       await notificationManager.requestEnableNotification(ctx);
     } catch (err) {
       hilog.warn(0x0000, TAG, 'requestEnable: ' + JSON.stringify(err));
+    }
+    try {
+      return notificationManager.isNotificationEnabledSync();
+    } catch (err) {
+      hilog.warn(0x0000, TAG, 'isNotificationEnabled after request: ' + JSON.stringify(err));
+      return false;
     }
   }
 
   // 新活儿到达：弹一条社交类通知（带横幅/声音由系统槽位决定）
   async notifyNewTask(fromName: string, title: string): Promise<void> {
     try {
+      if (!notificationManager.isNotificationEnabledSync()) {
+        hilog.warn(0x0000, TAG, 'notifyNewTask skipped: notification disabled');
+        return;
+      }
       const req: notificationManager.NotificationRequest = {
         id: this.seq++,
         notificationSlotType: notificationManager.SlotType.SOCIAL_COMMUNICATION,

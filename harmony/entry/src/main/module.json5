@@ -40,7 +40,7 @@
         "launchType": "singleton",
         "srcEntry": "./ets/entryability/EntryAbility.ets",
         "description": "$string:EntryAbility_desc",
-        "icon": "$media:layered_image",
+        "icon": "$media:startIcon",
         "label": "$string:EntryAbility_label",
         "startWindowIcon": "$media:startIcon",
         "startWindowBackground": "$color:start_window_background",
@@ -81,6 +81,11 @@
             "resource": "$profile:form_config"
           }
         ]
+      },
+      {
+        "name": "RemoteNotificationAbility",
+        "srcEntry": "./ets/remotenotification/RemoteNotificationAbility.ets",
+        "type": "remoteNotification"
       }
     ]
   }

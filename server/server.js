@@ -1,6 +1,8 @@
 // Paihuor relay (pure Node, node:sqlite, no npm deps). Polling sync + Huawei Push Kit notify.
 // Tasks API: POST /tasks (create), POST /tasks/:objectId (update/patch), DELETE /tasks/:objectId (soft delete; ?hard=1 purge)
 //            GET /tasks?familyId=&since=   (incremental; includes archived & deleted tombstones so flags propagate)
+// Uploads  : POST /uploads (raw image bytes, Content-Type: image/*) -> {id,url,mime,w,h,size}; task.images=[{id,mime,w,h,size}]
+//            GET /uploads/:id (serve bytes; auth via x-paihuor-key header OR ?key= for <img>); DELETE /uploads/:id (hard remove)
 // Devices  : POST /devices ({familyId,userId,platform,pushToken})
 // Admin    : GET /admin (web CRUD page), GET /admin/list (all rows, key-gated)
 // Debug    : POST /push-test ({familyId,userId,title,body,fromUserId})
@@ -20,6 +22,14 @@ const DB_FILE = path.join(DIR, 'paihuor.db');
 const LEGACY_TASKS = path.join(DIR, 'tasks.json');
 const LEGACY_DEVICES = path.join(DIR, 'devices.json');
 const TOMBSTONE_TTL = 30 * 24 * 3600 * 1000; // 软删墓碑保留 30 天后清理（低频App，给离线端足够同步窗口）
+
+// ---------------- Uploads (图片附件) ----------------
+const UPLOAD_DIR = path.join(DIR, 'uploads');       // 图片落盘目录，与 server.js/paihuor.db 同级
+try { fs.mkdirSync(UPLOAD_DIR, { recursive: true }); } catch (e) {}
+const MAX_UPLOAD = 15 * 1024 * 1024;                // 单图上限 15MiB(端上建议先降采样到 ~1600px/1MB)
+// 只收跨端都能显示的格式；iOS 的 HEIC 应在端上转码成 JPEG 再传(Harmony/浏览器不识别 HEIC)
+const MIME_EXT = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/gif': 'gif' };
+const MAX_IMAGES_PER_TASK = 9;                       // 每个任务最多 9 张(九宫格)
 
 const HW_PROJECT_ID = process.env.HW_PROJECT_ID || '';
 const HW_SERVICE_ACCOUNT_FILE = process.env.HW_SERVICE_ACCOUNT_FILE || path.join(DIR, 'hw-service-account.json');
@@ -44,6 +54,7 @@ db.exec(`
     status     TEXT DEFAULT 'pending',
     reminder   TEXT DEFAULT '{}',
     negotiation TEXT DEFAULT '[]',
+    images     TEXT DEFAULT '[]',
     archived   INTEGER DEFAULT 0,
     archivedAt INTEGER DEFAULT 0,
     archivedBy TEXT DEFAULT '',
@@ -60,10 +71,20 @@ db.exec(`
     familyId TEXT, userId TEXT, platform TEXT, pushToken TEXT, updatedAt INTEGER,
     PRIMARY KEY (familyId, userId, platform)
   );
+  CREATE TABLE IF NOT EXISTS attachments (
+    id        TEXT PRIMARY KEY,
+    familyId  TEXT DEFAULT '',
+    mime      TEXT DEFAULT '',
+    ext       TEXT DEFAULT '',
+    size      INTEGER DEFAULT 0,
+    w         INTEGER DEFAULT 0,
+    h         INTEGER DEFAULT 0,
+    createdAt INTEGER DEFAULT 0
+  );
 `);
 
 // 旧库补列(幂等; 列已存在则 ALTER 抛错被忽略)。对齐 iOS 契约的审计字段。
-["archivedAt INTEGER DEFAULT 0", "archivedBy TEXT DEFAULT ''", "deletedAt INTEGER DEFAULT 0", "deletedBy TEXT DEFAULT ''"].forEach((col) => {
+["archivedAt INTEGER DEFAULT 0", "archivedBy TEXT DEFAULT ''", "deletedAt INTEGER DEFAULT 0", "deletedBy TEXT DEFAULT ''", "images TEXT DEFAULT '[]'"].forEach((col) => {
   try { db.exec('ALTER TABLE tasks ADD COLUMN ' + col); } catch (e) {}
 });
 
@@ -77,16 +98,32 @@ const SCALAR = ['id','familyId','fromUserId','toUserId','rawText','title','detai
   'archivedAt','archivedBy','deletedAt','deletedBy'];
 const INTCOLS = ['deadline','receivedAt','doneAt','createdAt','updatedAt','archivedAt','deletedAt']; // 整数列(其余标量按字符串)
 
+// 图片元数据规整：只保留 {id,mime,w,h,size} 规范字段，过滤脏数据并封顶数量
+function normImages(arr) {
+  if (!Array.isArray(arr)) return [];
+  return arr
+    .filter((x) => x && x.id)
+    .map((x) => ({
+      id: String(x.id),
+      mime: String(x.mime || 'image/jpeg'),
+      w: Number(x.w) || 0,
+      h: Number(x.h) || 0,
+      size: Number(x.size) || 0
+    }))
+    .slice(0, MAX_IMAGES_PER_TASK);
+}
+
 function rowToTask(r) {
   if (!r) return null;
-  let reminder = {}; let negotiation = [];
+  let reminder = {}; let negotiation = []; let images = [];
   try { reminder = JSON.parse(r.reminder || '{}'); } catch (e) {}
   try { negotiation = JSON.parse(r.negotiation || '[]'); } catch (e) {}
+  try { images = normImages(JSON.parse(r.images || '[]')); } catch (e) {}
   return {
     objectId: r.objectId, id: r.id || '', familyId: r.familyId,
     fromUserId: r.fromUserId, toUserId: r.toUserId, rawText: r.rawText,
     title: r.title, detail: r.detail, deadline: r.deadline, status: r.status,
-    reminder, negotiation,
+    reminder, negotiation, images,
     archived: !!r.archived, deleted: !!r.deleted,
     archivedAt: r.archivedAt || 0, archivedBy: r.archivedBy || '',
     deletedAt: r.deletedAt || 0, deletedBy: r.deletedBy || '',
@@ -102,13 +139,14 @@ function getTask(objectId) {
 function insertTask(t) {
   db.prepare(`INSERT INTO tasks
     (objectId,id,familyId,fromUserId,toUserId,rawText,title,detail,deadline,status,
-     reminder,negotiation,archived,deleted,receivedAt,doneAt,createdAt,updatedAt,
+     reminder,negotiation,images,archived,deleted,receivedAt,doneAt,createdAt,updatedAt,
      archivedAt,archivedBy,deletedAt,deletedBy)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
     t.objectId, t.id || '', t.familyId, t.fromUserId || '', t.toUserId || '',
     t.rawText || '', t.title || '', t.detail || '', Number(t.deadline) || 0,
     t.status || 'pending',
     JSON.stringify(t.reminder || {}), JSON.stringify(t.negotiation || []),
+    JSON.stringify(normImages(t.images)),
     (t.archived || Number(t.archivedAt) > 0) ? 1 : 0,
     (t.deleted || Number(t.deletedAt) > 0) ? 1 : 0,
     Number(t.receivedAt) || 0, Number(t.doneAt) || 0,
@@ -138,6 +176,7 @@ function patchTask(objectId, patch) {
     if (k === 'objectId' || k === 'updatedAt') continue;
     if (k === 'reminder') { sets.push('reminder=?'); vals.push(JSON.stringify(patch[k] || {})); }
     else if (k === 'negotiation') { sets.push('negotiation=?'); vals.push(JSON.stringify(patch[k] || [])); }
+    else if (k === 'images') { sets.push('images=?'); vals.push(JSON.stringify(normImages(patch[k]))); }
     else if (k === 'archived' || k === 'deleted') {
       const on = patch[k] ? 1 : 0;
       sets.push(`${k}=?`); vals.push(on);
@@ -203,6 +242,35 @@ function purgeTombstones() {
 purgeTombstones();
 setInterval(purgeTombstones, 24 * 3600 * 1000);
 
+// 收集所有任务(含归档/墓碑)当前引用到的图片 id
+function referencedImageIds() {
+  const set = new Set();
+  try {
+    for (const r of db.prepare('SELECT images FROM tasks').all()) {
+      try { JSON.parse(r.images || '[]').forEach((im) => { if (im && im.id) set.add(im.id); }); } catch (e) {}
+    }
+  } catch (e) {}
+  return set;
+}
+// 清理没有任何任务引用、且已过 24h 宽限期的孤儿图片（上传先于任务保存，宽限期防误删）
+function purgeOrphanUploads() {
+  try {
+    const ref = referencedImageIds();
+    const grace = Date.now() - 24 * 3600 * 1000;
+    const rows = db.prepare('SELECT id, ext FROM attachments WHERE createdAt < ?').all(grace);
+    let n = 0;
+    for (const a of rows) {
+      if (ref.has(a.id)) continue;
+      try { fs.unlinkSync(path.join(UPLOAD_DIR, a.id + '.' + a.ext)); } catch (e) {}
+      db.prepare('DELETE FROM attachments WHERE id=?').run(a.id);
+      n++;
+    }
+    if (n) console.log('purged', n, 'orphan uploads');
+  } catch (e) { console.log('orphan purge err', e.message); }
+}
+purgeOrphanUploads();
+setInterval(purgeOrphanUploads, 24 * 3600 * 1000);
+
 // ---------------- HTTP helpers ----------------
 function send(res, code, obj, isHtml) {
   res.writeHead(code, {
@@ -220,6 +288,59 @@ function readBody(req) {
     req.on('data', (c) => (b += c));
     req.on('end', () => { try { resolve(b ? JSON.parse(b) : {}); } catch (e) { resolve({}); } });
   });
+}
+// 读取原始二进制 body（图片上传用），超过 maxBytes 立即中断
+function readRawBody(req, maxBytes) {
+  return new Promise((resolve, reject) => {
+    const chunks = []; let total = 0; let aborted = false;
+    req.on('data', (c) => {
+      if (aborted) return;
+      total += c.length;
+      if (total > maxBytes) { aborted = true; req.destroy(); reject(new Error('too large')); return; }
+      chunks.push(c);
+    });
+    req.on('end', () => { if (!aborted) resolve(Buffer.concat(chunks)); });
+    req.on('error', (e) => { if (!aborted) reject(e); });
+  });
+}
+// 无依赖嗅探常见图片尺寸；识别不了返回 {0,0}，由端上 ?w=&h= 提示兜底
+function sniffImageSize(buf, mime) {
+  try {
+    if (mime === 'image/png' && buf.length >= 24 && buf[0] === 0x89 && buf[1] === 0x50) {
+      return { w: buf.readUInt32BE(16), h: buf.readUInt32BE(20) };
+    }
+    if (mime === 'image/gif' && buf.length >= 10 && buf[0] === 0x47 && buf[1] === 0x49) {
+      return { w: buf.readUInt16LE(6), h: buf.readUInt16LE(8) };
+    }
+    if (mime === 'image/jpeg' && buf[0] === 0xFF && buf[1] === 0xD8) {
+      let o = 2;
+      while (o + 9 < buf.length) {
+        if (buf[o] !== 0xFF) { o++; continue; }
+        const marker = buf[o + 1];
+        if (marker >= 0xC0 && marker <= 0xCF && marker !== 0xC4 && marker !== 0xC8 && marker !== 0xCC) {
+          return { h: buf.readUInt16BE(o + 5), w: buf.readUInt16BE(o + 7) };
+        }
+        const len = buf.readUInt16BE(o + 2);
+        if (len < 2) break;
+        o += 2 + len;
+      }
+    }
+    if (mime === 'image/webp' && buf.length >= 30 &&
+        buf.toString('ascii', 0, 4) === 'RIFF' && buf.toString('ascii', 8, 12) === 'WEBP') {
+      const fmt = buf.toString('ascii', 12, 16);
+      if (fmt === 'VP8X') {
+        const w = 1 + (buf[24] | (buf[25] << 8) | (buf[26] << 16));
+        const h = 1 + (buf[27] | (buf[28] << 8) | (buf[29] << 16));
+        return { w, h };
+      }
+      if (fmt === 'VP8 ') { return { w: buf.readUInt16LE(26) & 0x3FFF, h: buf.readUInt16LE(28) & 0x3FFF }; }
+      if (fmt === 'VP8L' && buf[20] === 0x2F) {
+        const b = buf.readUInt32LE(21);
+        return { w: 1 + (b & 0x3FFF), h: 1 + ((b >> 14) & 0x3FFF) };
+      }
+    }
+  } catch (e) {}
+  return { w: 0, h: 0 };
 }
 
 // ---------------- Huawei Push Kit (HarmonyOS NEXT, v3) ----------------
@@ -375,7 +496,8 @@ function notifyRecipient(task) {
       `SELECT pushToken FROM devices WHERE familyId=? AND userId=? AND platform='harmony' AND pushToken<>''`)
       .all(task.familyId, task.toUserId).map((d) => d.pushToken);
     if (toks.length === 0) return;
-    const content = '新任务：' + (task.title || task.rawText || '有一条新任务');
+    const hasImg = task.images && task.images.length;
+    const content = '新任务：' + (task.title || task.rawText || (hasImg ? '有一张图片' : '有一条新任务')) + (hasImg ? ' 📷' : '');
     pushToTokens(toks, '派活儿', content, task).catch((e) => console.log('push err:', e.message));
   } catch (e) { console.log('notify err:', e.message); }
 }
@@ -389,6 +511,25 @@ const server = http.createServer(async (req, res) => {
 
   // 管理台 HTML 外壳无需 key（页面内再用 key 调 API）
   if (req.method === 'GET' && url.pathname === '/admin') return send(res, 200, ADMIN_HTML, true);
+
+  // 图片读取：<img> 无法带自定义 header，允许 header key 或 ?key= 二选一（私有 App，单密钥足够）
+  if (req.method === 'GET' && url.pathname.startsWith('/uploads/')) {
+    const key = req.headers['x-paihuor-key'] || url.searchParams.get('key') || '';
+    if (key !== SECRET) return send(res, 401, { error: 'bad key' });
+    const id = decodeURIComponent(url.pathname.slice('/uploads/'.length));
+    const a = db.prepare('SELECT * FROM attachments WHERE id=?').get(id); // 仅服务已入库的 id，天然防路径穿越
+    if (!a) return send(res, 404, { error: 'not found' });
+    let data;
+    try { data = fs.readFileSync(path.join(UPLOAD_DIR, a.id + '.' + a.ext)); }
+    catch (e) { return send(res, 404, { error: 'file missing' }); }
+    res.writeHead(200, {
+      'Content-Type': a.mime || 'application/octet-stream',
+      'Content-Length': data.length,
+      'Cache-Control': 'private, max-age=31536000, immutable', // 内容不可变，可长期缓存
+      'Access-Control-Allow-Origin': '*'
+    });
+    return res.end(data);
+  }
 
   if (req.headers['x-paihuor-key'] !== SECRET) return send(res, 401, { error: 'bad key' });
 
@@ -446,6 +587,39 @@ const server = http.createServer(async (req, res) => {
     sql += ' ORDER BY updatedAt ASC';
     const rows = db.prepare(sql).all(fam, since).map(rowToTask);
     return send(res, 200, rows);
+  }
+
+  // 图片上传：原始字节 body（非 JSON），Content-Type 决定格式，?familyId= 用于 GC 归属，?w=&h= 为端上尺寸提示
+  if (req.method === 'POST' && url.pathname === '/uploads') {
+    const ct = (req.headers['content-type'] || '').split(';')[0].trim().toLowerCase();
+    const ext = MIME_EXT[ct];
+    if (!ext) return send(res, 415, { error: 'unsupported media type', allowed: Object.keys(MIME_EXT) });
+    const clen = Number(req.headers['content-length'] || 0);
+    if (clen && clen > MAX_UPLOAD) return send(res, 413, { error: 'too large', maxBytes: MAX_UPLOAD });
+    let buf;
+    try { buf = await readRawBody(req, MAX_UPLOAD); }
+    catch (e) { return send(res, 413, { error: 'too large', maxBytes: MAX_UPLOAD }); }
+    if (!buf.length) return send(res, 400, { error: 'empty body' });
+    const id = crypto.randomUUID();
+    const fam = url.searchParams.get('familyId') || '';
+    const dim = sniffImageSize(buf, ct);
+    const w = dim.w || Number(url.searchParams.get('w')) || 0;
+    const h = dim.h || Number(url.searchParams.get('h')) || 0;
+    const now = Date.now();
+    try { fs.writeFileSync(path.join(UPLOAD_DIR, id + '.' + ext), buf); }
+    catch (e) { return send(res, 500, { error: 'write failed' }); }
+    db.prepare('INSERT INTO attachments (id,familyId,mime,ext,size,w,h,createdAt) VALUES (?,?,?,?,?,?,?,?)')
+      .run(id, fam, ct, ext, buf.length, w, h, now);
+    return send(res, 200, { id, url: '/uploads/' + id, mime: ct, ext, size: buf.length, w, h, createdAt: now });
+  }
+
+  // 物理删除图片文件+元数据（管理台清理用；正常同步不需要，孤儿图由 GC 回收）
+  if (req.method === 'DELETE' && url.pathname.startsWith('/uploads/')) {
+    const id = decodeURIComponent(url.pathname.slice('/uploads/'.length));
+    const a = db.prepare('SELECT * FROM attachments WHERE id=?').get(id);
+    if (a) { try { fs.unlinkSync(path.join(UPLOAD_DIR, a.id + '.' + a.ext)); } catch (e) {} }
+    const r = db.prepare('DELETE FROM attachments WHERE id=?').run(id);
+    return send(res, 200, { ok: true, removed: r.changes });
   }
 
   if (req.method === 'POST' && url.pathname === '/devices') {
@@ -513,6 +687,11 @@ dialog label{display:block;font-size:12px;color:#666;margin:10px 0 4px}
 dialog input,dialog textarea,dialog select{width:100%}
 .row{display:flex;gap:8px}.row>*{flex:1}
 small{color:var(--mut)}
+.thumb{width:38px;height:38px;object-fit:cover;border-radius:6px;margin-right:6px;vertical-align:middle;border:1px solid #eee}
+.imgs{display:flex;flex-wrap:wrap;gap:8px;margin:4px 0}
+.imgchip{position:relative;display:inline-block}
+.imgchip img{width:66px;height:66px;object-fit:cover;border-radius:8px;border:1px solid #ddd;display:block}
+.imgchip .rm{position:absolute;top:-7px;right:-7px;background:var(--dan);color:#fff;border:none;border-radius:50%;width:20px;height:20px;padding:0;font-size:13px;line-height:1;cursor:pointer}
 </style></head><body>
 <header><h1>派活儿 · 任务管理台</h1>
 <input id="key" type="password" placeholder="访问密钥 x-paihuor-key" style="color:#333;min-width:220px">
@@ -549,6 +728,9 @@ small{color:var(--mut)}
     <div><label>截止 deadline (epoch ms, 0=无)</label><input id="f_deadline" type="number"></div>
     <div><label>归档</label><select id="f_archived"><option value="0">否</option><option value="1">是</option></select></div>
   </div>
+  <label>图片（点击下方选择上传，支持 jpg/png/webp/gif）</label>
+  <div id="f_images_list" class="imgs"></div>
+  <input type="file" id="f_images_input" accept="image/jpeg,image/png,image/webp,image/gif" multiple onchange="onPickImages(event)">
   <input type="hidden" id="f_objectId">
   <div class="bar" style="margin-top:14px;justify-content:flex-end">
     <button type="button" class="sec" onclick="dlg.close()">取消</button>
@@ -558,9 +740,31 @@ small{color:var(--mut)}
 
 <script>
 let DATA=[];
+let curImages=[]; // 编辑弹窗里当前任务的图片元数据数组
 const $=id=>document.getElementById(id);
 const dlg=$('dlg');
 function K(){return $('key').value.trim()}
+function imgUrl(id){return '/uploads/'+encodeURIComponent(id)+'?key='+encodeURIComponent(K())}
+function renderImgs(){
+  $('f_images_list').innerHTML=curImages.map((im,i)=>
+    '<span class="imgchip"><img src="'+imgUrl(im.id)+'" alt=""><button type="button" class="rm" onclick=\\'rmImg('+i+')\\'>×</button></span>'
+  ).join('');
+}
+function rmImg(i){curImages.splice(i,1);renderImgs()}
+async function onPickImages(ev){
+  const files=[...ev.target.files];ev.target.value='';
+  const fam=$('f_family').value.trim()||'';
+  for(const f of files){
+    if(!/^image\\/(jpeg|png|webp|gif)$/.test(f.type)){alert('仅支持 jpg/png/webp/gif: '+f.name);continue}
+    try{
+      const r=await fetch('/uploads?familyId='+encodeURIComponent(fam),{method:'POST',headers:{'x-paihuor-key':K(),'Content-Type':f.type},body:f});
+      if(!r.ok){alert('上传失败 '+f.name+' '+r.status);continue}
+      const j=await r.json();
+      curImages.push({id:j.id,mime:j.mime,w:j.w,h:j.h,size:j.size});
+    }catch(e){alert('上传出错 '+e.message)}
+  }
+  renderImgs();
+}
 function saveKey(){localStorage.setItem('phk',K());load()}
 function hdr(){return {'x-paihuor-key':K(),'Content-Type':'application/json'}}
 function fmt(ms){if(!ms)return '-';const d=new Date(ms);const p=n=>(n<10?'0':'')+n;return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate())+' '+p(d.getHours())+':'+p(d.getMinutes())}
@@ -582,8 +786,10 @@ function render(){
   $('cnt').textContent='共 '+rows.length+' 条 / 总 '+DATA.length;
   $('tb').innerHTML=rows.map(t=>{
     const neg=(t.negotiation||[]).length;
+    const imgs=(t.images||[]);
+    const thumb=imgs.length?('<img class="thumb" src="'+imgUrl(imgs[0].id)+'" alt="">'+(imgs.length>1?'<small>×'+imgs.length+'</small> ':'')):'';
     return '<tr class="'+(t.deleted?'del':'')+'">'
-      +'<td><b>'+esc(t.title||t.rawText||'(无标题)')+'</b>'+(t.detail?'<br><small>'+esc(t.detail)+'</small>':'')+'</td>'
+      +'<td>'+thumb+'<b>'+esc(t.title||t.rawText||'(无标题)')+'</b>'+(t.detail?'<br><small>'+esc(t.detail)+'</small>':'')+'</td>'
       +'<td>'+esc(t.fromUserId)+'→'+esc(t.toUserId)+'</td>'
       +'<td><span class="tag s-'+esc(t.status)+'">'+esc(t.status)+'</span>'+(t.archived?' <span class="tag arch">归档</span>':'')+'</td>'
       +'<td>'+fmt(t.deadline)+'</td>'
@@ -600,20 +806,23 @@ function esc(s){return (s==null?'':''+s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':
 function openNew(){
   $('f_objectId').value='';$('f_title').value='';$('f_detail').value='';$('f_rawText').value='';
   $('f_from').value='wife';$('f_to').value='husband';$('f_family').value=(DATA[0]&&DATA[0].familyId)||'fam-xxx';
-  $('f_deadline').value=0;$('f_status').value='pending';$('f_archived').value='0';dlg.showModal();
+  $('f_deadline').value=0;$('f_status').value='pending';$('f_archived').value='0';
+  curImages=[];renderImgs();dlg.showModal();
 }
 function edit(oid){
   const t=DATA.find(x=>x.objectId===oid);if(!t)return;
   $('f_objectId').value=t.objectId;$('f_title').value=t.title||'';$('f_detail').value=t.detail||'';
   $('f_rawText').value=t.rawText||'';$('f_from').value=t.fromUserId||'';$('f_to').value=t.toUserId||'';
   $('f_family').value=t.familyId||'';$('f_deadline').value=t.deadline||0;$('f_status').value=t.status||'pending';
-  $('f_archived').value=t.archived?'1':'0';dlg.showModal();
+  $('f_archived').value=t.archived?'1':'0';
+  curImages=(t.images||[]).map(x=>({id:x.id,mime:x.mime,w:x.w,h:x.h,size:x.size}));renderImgs();dlg.showModal();
 }
 async function saveRow(){
   const oid=$('f_objectId').value;
   const body={title:$('f_title').value,detail:$('f_detail').value,rawText:$('f_rawText').value,
     fromUserId:$('f_from').value,toUserId:$('f_to').value,familyId:$('f_family').value,
-    deadline:Number($('f_deadline').value)||0,status:$('f_status').value,archived:$('f_archived').value==='1'};
+    deadline:Number($('f_deadline').value)||0,status:$('f_status').value,archived:$('f_archived').value==='1',
+    images:curImages};
   try{
     if(oid){await fetch('/tasks/'+encodeURIComponent(oid),{method:'POST',headers:hdr(),body:JSON.stringify(body)});}
     else{await fetch('/tasks',{method:'POST',headers:hdr(),body:JSON.stringify(body)});}

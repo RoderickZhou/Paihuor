@@ -8,3 +8,7 @@ xcuserdata/
 Paihuor/Config/Secrets.xcconfig
 *.moved-aside
 *.ipa
+server/uploads/
+server/paihuor.db
+server/paihuor.db-*
+server/*.db.bak-*

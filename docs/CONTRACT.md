@@ -28,6 +28,15 @@
 | `archivedBy` | String | 归档来源，建议 `system` / `wife` / `husband`，可缺省 |
 | `deletedAt` | Number | 软删除时刻 epoch ms，`0` 或缺省表示未删除 |
 | `deletedBy` | String | 删除发起人，只允许原 `fromUserId` 发起，建议 `wife` / `husband` |
+| `images` | Array | 图片附件元数据数组，每项 `{ id, mime, w, h, size }`；空数组/缺省表示无图。详见「图片附件」节 |
+
+图片元素结构（`images` 数组每一项）：
+
+```json
+{ "id": "服务端分配的附件id(uuid)", "mime": "image/jpeg", "w": 1080, "h": 1440, "size": 234567 }
+```
+
+`images` 与 `negotiation` 一致，采用**整段数组覆盖**写回（`POST /tasks/{objectId}` 带完整 `images` 即替换）。图片二进制不进任务 JSON，仅存 `id` 等元数据；真实 URL 由端上用 `中继base + /uploads/{id}` 拼接。服务端封顶每任务 9 张，超出截断，并过滤缺 `id` 的脏元素。
 
 默认 `reminder`：
 
@@ -66,6 +75,27 @@
 - `POST /tasks/{objectId}`：更新任务，body 使用 Task 字段，可用于 `status`、`receivedAt`、`doneAt`、`negotiation`、`archivedAt`、`deletedAt` 等状态变化
 - `DELETE /tasks/{objectId}?by=<userId>`：默认软删，服务端置 `deleted=true`、记录 `deletedBy` 并刷新 `updatedAt`；`?hard=1` 为管理台物理删除
 - `POST /devices`：注册设备推送 token
+
+### 图片附件（Uploads）
+
+图片走**两阶段、旁路上传**：先把二进制传到中继换回 `id`，再把 `{id,...}` 元数据放进任务的 `images` 字段随任务同步。图片字节**不进任务 JSON、不进 `GET /tasks` 增量**，避免撑大同步体积（沿用降低轮询流量的思路）。
+
+- `POST /uploads?familyId=<familyId>&w=<可选>&h=<可选>`
+  - Header：`x-paihuor-key: <KEY>`，`Content-Type: image/jpeg|image/png|image/webp|image/gif`（**必填且决定存储格式**）
+  - Body：**原始图片字节**（非 multipart、非 base64、非 JSON）
+  - 上限：单图 **15 MiB**（超出 `413`）；不支持的 `Content-Type` 返回 `415`
+  - `w`/`h` 为端上尺寸提示；服务端会自行嗅探 PNG/JPEG/GIF/WebP 尺寸，嗅探不到才用提示兜底
+  - 返回：`{ "id","url":"/uploads/{id}","mime","ext","size","w","h","createdAt" }`
+- `GET /uploads/{id}`：返回图片字节。鉴权二选一：`x-paihuor-key` header **或** `?key=<KEY>`（供 `<img>` 直接引用）。响应 `Cache-Control: immutable`，可长期缓存
+- `DELETE /uploads/{id}`：物理删除图片文件+元数据（管理台清理用；正常同步不需要，孤儿图由服务端 GC 回收）
+
+跨端注意：
+
+- **URL 由端上拼**：`RELAY_LAN_URL`/`RELAY_BASE_URL` + `/uploads/{id}`（+ 需要时带 `?key=`）。不要把绝对 URL 存进 `images`，因为 LAN/公网 base 不同。
+- **iOS 的 HEIC 必须先转码成 JPEG 再传**（Harmony/浏览器不识别 HEIC）。中继只接 jpg/png/webp/gif。
+- 上传前**端上先降采样**（建议最长边 ≤1600px、JPEG≈0.8、单图目标 ~1MB），省穿透隧道流量、加快对端加载。
+- **孤儿回收**：上传后若 24h 内没有任何任务引用该 `id`，服务端会当孤儿清掉。因此**先上传拿 id、尽快随任务保存**；不要长期只上传不落任务。
+- 权限沿用任务规则：编辑/删除（含改 `images`）仅**新建方**（`fromUserId==我`）可做。
 
 用户主动删除自己发起的任务时，客户端调用 `DELETE /tasks/{objectId}?by=<userId>` 做软删除；两端拉取到 `deleted=true` 后应从日常任务列表隐藏。`deletedAt` / `deletedBy` 是跨端审计字段，服务端以 `deleted` 墓碑为准。
 

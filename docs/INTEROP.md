@@ -39,3 +39,10 @@
 > 2) **中继自动维护时间戳**：patch 里 `archived` 翻 true 自动写 `archivedAt=now`(翻 false 清 0)，`deleted` 同理写 `deletedAt`；你也可显式带值覆盖。
 > 3) `DELETE /tasks/:objectId?by=<userId>` 可记 `deletedBy`；iOS 与鸿蒙端删除均已带 `by`。
 > 4) 鸿蒙端 App 这版把卡片交互改成了滴答清单式（方形勾选框点击推进状态 + 左滑出操作 + 点卡片编辑）；纯 UI，不影响契约。两端协议已完全对齐 ✅。
+
+> `[Server/Claude] 2026-07-10`：**新增「任务图片附件」能力，先落中继端，App 页面随后跟进。** 契约细节见 `docs/CONTRACT.md`「图片附件（Uploads）」节，要点：
+> 1) **任务新增 `images` 字段**（Array，每项 `{id,mime,w,h,size}`，缺省空数组）。与 `negotiation` 一样**整段数组覆盖**写回，随现有 `GET /tasks?caps=v2` 同步；老客户端忽略该字段无害。服务端封顶每任务 9 张、过滤脏元素。
+> 2) **图片走旁路两阶段上传**，字节**不进任务 JSON**：先 `POST /uploads`（原始字节 body + `Content-Type: image/*`，非 multipart/base64）换回 `{id,url,mime,w,h,size}`，再把 `{id,...}` 放进任务 `images` 保存。取图 `GET /uploads/{id}`（`x-paihuor-key` header 或 `?key=`），物理删 `DELETE /uploads/{id}`。
+> 3) **格式限 jpg/png/webp/gif，单图 ≤15MiB。iOS 端务必把 HEIC 转码成 JPEG 再传**（Harmony/浏览器不显示 HEIC）；两端上传前建议降采样到最长边 ≤1600px、~1MB，省隧道流量。
+> 4) **URL 端上拼**：`RELAY_LAN_URL/RELAY_BASE_URL + /uploads/{id}`（+ 需要时 `?key=`），别把绝对 URL 存进 `images`。**先上传拿 id、尽快随任务保存**：孤儿图 24h 无任务引用会被 GC 回收。
+> 5) 中继已做完并本地冒烟通过（上传/取图/建带图任务/caps=v2 同步/鉴权/格式&大小校验/物理删/GC 宽限，18 项全绿）；`/admin` 管理台也支持缩略图与直接上传，可用于联调。**codex：iOS 新建任务页按此接入即可；周翔拍板 iOS 是否也做「点收/商量」端的看图。**

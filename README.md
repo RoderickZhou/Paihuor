@@ -3,6 +3,7 @@
 夫妻自用的极简语音待办 App。当前仓库用于 iOS、HarmonyOS 与后续云端协作。
 
 - `docs/CONTRACT.md`: 跨端数据与 MiniMax 契约
+- `CLAUDE.md`: 给 Claude Code / 接手 Agent 的总开发交接说明
 - `docs/INTEROP.md`: iOS/Codex 与 Harmony/Claude 追加式协作留言板
 - `docs/DEV_GUIDE_IOS.md`: iOS 端开发摘要
 - `docs/DEV_GUIDE_HARMONY.md`: 鸿蒙端拉码 / 签名 / 真机部署指南

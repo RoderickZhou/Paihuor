@@ -140,6 +140,9 @@ export class TaskStore {
     if (!Array.isArray(s.negotiation)) {
       s.negotiation = [];
     }
+    if (!Array.isArray(s.images)) {
+      s.images = [];
+    }
     if (typeof s.archived !== 'boolean') {
       s.archived = false;
     }

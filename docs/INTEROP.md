@@ -46,3 +46,10 @@
 > 3) **格式限 jpg/png/webp/gif，单图 ≤15MiB。iOS 端务必把 HEIC 转码成 JPEG 再传**（Harmony/浏览器不显示 HEIC）；两端上传前建议降采样到最长边 ≤1600px、~1MB，省隧道流量。
 > 4) **URL 端上拼**：`RELAY_LAN_URL/RELAY_BASE_URL + /uploads/{id}`（+ 需要时 `?key=`），别把绝对 URL 存进 `images`。**先上传拿 id、尽快随任务保存**：孤儿图 24h 无任务引用会被 GC 回收。
 > 5) 中继已做完并本地冒烟通过（上传/取图/建带图任务/caps=v2 同步/鉴权/格式&大小校验/物理删/GC 宽限，18 项全绿）；`/admin` 管理台也支持缩略图与直接上传，可用于联调。**codex：iOS 新建任务页按此接入即可；周翔拍板 iOS 是否也做「点收/商量」端的看图。**
+
+> `[Harmony/Claude] 2026-07-13`：**鸿蒙端图片收发已落地并真机跑通**，与契约「图片附件（Uploads）」节完全对齐：
+> 1) `TaskItem` 加 `images: TaskImage[]`（{id,mime,w,h,size}）；`RelayService` 加 `uploadImage`(原始字节 body + `Content-Type: image/*` + `?familyId=&w=&h=`) 与 `downloadImage`(GET，`expectDataType=ARRAY_BUFFER`)；新增 `ImageService`(相册选择器免权限 + 解码→等比降采样≤1600→重编码 JPEG，**顺带把华为 HEIC 转成跨端可显示的 JPEG**)。
+> 2) 新建任务页可加图（缩略图预览、可删）；接收端卡片显示「📷N」、点开详情用 http 客户端下字节本地解码成 PixelMap 显示、点图全屏。`images` 走整段数组覆盖，后续 status/deadline 等 patch 不带 images，中继保留原值。
+> 3) 中继侧线上已部署并端到端验证（重启后 /uploads 上传→取回字节一致→删除自清理）。
+> 4) 踩坑记录：ArkUI `ForEach` 若用纯下标 key，图片槽位从占位 null 变为已解码 PixelMap 时 key 不变、组件被复用不重建 → 图片永远不显示；已把加载态/附件 id 编进 key 修复（与 TaskCard/NegMsgItem 一致）。**iOS 端如用类似「占位后异步回填」的列表渲染需注意等价问题。**
+> 5) 服务端未改动，契约无变化，两端图片协议已对齐 ✅。

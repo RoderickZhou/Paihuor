@@ -1,12 +1,17 @@
 import { http } from '@kit.NetworkKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { AppConfig } from '../config/AppConfig';
-import { TaskItem } from '../models/TaskModels';
+import { TaskItem, TaskImage } from '../models/TaskModels';
 
 const TAG = 'RelayService';
 
 interface RelayHeader {
   'Content-Type': string;
+  'x-paihuor-key': string;
+}
+
+// 取图只需带密钥；下载走 ARRAY_BUFFER
+interface KeyHeader {
   'x-paihuor-key': string;
 }
 
@@ -125,6 +130,55 @@ export class RelayService {
       hilog.error(0x0000, TAG, 'update: ' + JSON.stringify(err));
       this.resetBase();
       return false;
+    } finally {
+      c.destroy();
+    }
+  }
+
+  // 上传一张图片（原始字节 body + Content-Type: image/*），返回中继分配的附件元数据
+  async uploadImage(bytes: ArrayBuffer, mime: string, familyId: string, w: number, h: number): Promise<TaskImage | null> {
+    const b = await this.base();
+    const c = http.createHttp();
+    try {
+      const u = b + '/uploads?familyId=' + encodeURIComponent(familyId) + '&w=' + w + '&h=' + h;
+      const header: RelayHeader = { 'Content-Type': mime, 'x-paihuor-key': AppConfig.RELAY_KEY };
+      const resp = await c.request(u, {
+        method: http.RequestMethod.POST, header: header,
+        extraData: bytes, connectTimeout: 20000, readTimeout: 30000
+      });
+      if (resp.responseCode !== 200) {
+        hilog.error(0x0000, TAG, 'uploadImage code=' + resp.responseCode);
+        return null;
+      }
+      return JSON.parse(resp.result as string) as TaskImage;
+    } catch (err) {
+      hilog.error(0x0000, TAG, 'uploadImage: ' + JSON.stringify(err));
+      this.resetBase();
+      return null;
+    } finally {
+      c.destroy();
+    }
+  }
+
+  // 下载一张图片的原始字节（供本地解码成 PixelMap 显示）
+  async downloadImage(id: string): Promise<ArrayBuffer | null> {
+    const b = await this.base();
+    const c = http.createHttp();
+    try {
+      const header: KeyHeader = { 'x-paihuor-key': AppConfig.RELAY_KEY };
+      const resp = await c.request(b + '/uploads/' + encodeURIComponent(id), {
+        method: http.RequestMethod.GET, header: header,
+        expectDataType: http.HttpDataType.ARRAY_BUFFER,
+        connectTimeout: 15000, readTimeout: 30000
+      });
+      if (resp.responseCode !== 200) {
+        return null;
+      }
+      return resp.result as ArrayBuffer;
+    } catch (err) {
+      hilog.error(0x0000, TAG, 'downloadImage: ' + JSON.stringify(err));
+      this.resetBase();
+      return null;
     } finally {
       c.destroy();
     }

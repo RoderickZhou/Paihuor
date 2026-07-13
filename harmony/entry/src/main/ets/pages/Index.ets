@@ -1,11 +1,13 @@
 import { abilityAccessCtrl, common, Permissions } from '@kit.AbilityKit';
+import { image } from '@kit.ImageKit';
 import { Constants } from '../constants/Constants';
-import { TaskItem, TaskStatus, ReminderConfig, NegotiationMsg } from '../models/TaskModels';
+import { TaskItem, TaskStatus, ReminderConfig, NegotiationMsg, TaskImage } from '../models/TaskModels';
 import { TaskStore } from '../services/TaskStore';
 import { AsrService } from '../services/AsrService';
 import { AIService } from '../services/AIService';
 import { ReminderService } from '../services/ReminderService';
 import { RelayService } from '../services/RelayService';
+import { ImageService } from '../services/ImageService';
 import { NotificationService } from '../services/NotificationService';
 import { DeviceService } from '../services/DeviceService';
 import { updateAllCards } from '../services/WidgetCardData';
@@ -23,6 +25,15 @@ struct Index {
   @State asrText: string = '';
   @State extracting: boolean = false;
   @State recordError: string = '';
+  // 新建任务的图片附件：draftImages=已上传元数据，draftThumbs=本端预览缩略图（同序）
+  @State draftImages: TaskImage[] = [];
+  @State draftThumbs: image.PixelMap[] = [];
+  @State uploadingImg: boolean = false;
+  // 详情里对方图片解码后的 PixelMap（随下载逐张出现）
+  @State detailImages: (image.PixelMap | null)[] = [];
+  @State detailImgLoading: boolean = false;
+  // 全屏看图
+  @State previewImage: image.PixelMap | null = null;
   // 商量弹窗状态
   @State showNegotiate: boolean = false;
   @State negTaskId: string = '';
@@ -272,9 +283,28 @@ struct Index {
         this.EditSheet()
       }
 
+      if (this.previewImage != null) {
+        this.ImagePreviewOverlay()
+      }
+
     }
     .width('100%')
     .height('100%')
+  }
+
+  // 全屏看图：点任意处关闭
+  @Builder
+  ImagePreviewOverlay() {
+    Stack() {
+      Image(this.previewImage)
+        .objectFit(ImageFit.Contain)
+        .width('100%')
+        .height('100%')
+    }
+    .width('100%')
+    .height('100%')
+    .backgroundColor('#E6000000')
+    .onClick(() => { this.previewImage = null; })
   }
 
   @Builder
@@ -576,6 +606,25 @@ struct Index {
           .fontColor(this.draftDeadline > 0 ? Constants.COLOR_PRIMARY : Constants.COLOR_TEXT_SECONDARY)
           .width('100%').margin({ top: 10 })
 
+        // 图片附件
+        Row() {
+          Text('图片')
+            .fontSize(14).fontColor(Constants.COLOR_TEXT_SECONDARY)
+          Blank()
+          if (this.uploadingImg) {
+            Row() {
+              LoadingProgress().width(16).height(16).color(Constants.COLOR_PRIMARY)
+              Text(' 上传中…').fontSize(12).fontColor(Constants.COLOR_TEXT_SECONDARY)
+            }
+          } else {
+            Text(this.draftImages.length + '/9')
+              .fontSize(12).fontColor(Constants.COLOR_TEXT_SECONDARY)
+          }
+        }
+        .width('100%').margin({ top: 16, bottom: 8 })
+
+        this.DraftImagesRow()
+
         // 第四步：发送
         Row() {
           Button('取消')
@@ -600,6 +649,44 @@ struct Index {
     .width('100%')
     .height('100%')
     .backgroundColor('#66000000')
+  }
+
+  // 新建任务时的图片缩略图行：已选图 + 末尾「＋」添加按钮
+  @Builder
+  DraftImagesRow() {
+    Row() {
+      ForEach(this.draftThumbs, (pm: image.PixelMap, idx: number) => {
+        Stack({ alignContent: Alignment.TopEnd }) {
+          Image(pm)
+            .width(64).height(64)
+            .borderRadius(10)
+            .objectFit(ImageFit.Cover)
+            .backgroundColor(Constants.COLOR_BG)
+          Text('✕')
+            .fontSize(12).fontColor(Color.White)
+            .width(20).height(20)
+            .textAlign(TextAlign.Center)
+            .borderRadius(10)
+            .backgroundColor('#B3000000')
+            .margin({ top: -6, right: -6 })
+            .onClick(() => { this.removeDraftImage(idx); })
+        }
+        .margin({ right: 10 })
+      }, (pm: image.PixelMap, idx: number) => 'draft-' + (this.draftImages[idx] ? this.draftImages[idx].id : idx))
+
+      if (this.draftImages.length < 9) {
+        Column() {
+          Text('＋').fontSize(26).fontColor(Constants.COLOR_TEXT_SECONDARY)
+        }
+        .width(64).height(64)
+        .justifyContent(FlexAlign.Center)
+        .borderRadius(10)
+        .backgroundColor(Constants.COLOR_BG)
+        .border({ width: 1, color: Constants.COLOR_PRIMARY_LIGHT })
+        .onClick(() => { this.onAddImages(); })
+      }
+    }
+    .width('100%')
   }
 
   @Builder
@@ -701,6 +788,10 @@ struct Index {
           .width('100%')
           .margin({ bottom: 18 })
 
+        if (item.images.length > 0) {
+          this.DetailImagesBlock(item)
+        }
+
         if (item.negotiation.length > 0) {
           this.DetailNegotiationBlock(item)
         }
@@ -715,6 +806,54 @@ struct Index {
     }
     .width('100%').height('100%')
     .backgroundColor('#33000000')
+  }
+
+  // 详情里显示图片：3 列网格，点图全屏查看。图片随下载逐张出现
+  @Builder
+  DetailImagesBlock(item: TaskItem) {
+    Column() {
+      Row() {
+        Text('图片 · ' + item.images.length + ' 张')
+          .fontSize(12).fontWeight(FontWeight.Bold)
+          .fontColor(Constants.COLOR_TEXT_SECONDARY)
+        Blank()
+        if (this.detailImgLoading) {
+          Row() {
+            LoadingProgress().width(14).height(14).color(Constants.COLOR_PRIMARY)
+            Text(' 加载中…').fontSize(11).fontColor(Constants.COLOR_TEXT_SECONDARY)
+          }
+        }
+      }
+      .width('100%').margin({ bottom: 8 })
+
+      Flex({ wrap: FlexWrap.Wrap }) {
+        ForEach(this.detailImages, (pm: image.PixelMap | null, idx: number) => {
+          Column() {
+            if (pm != null) {
+              Image(pm)
+                .width('100%').height(100)
+                .borderRadius(8)
+                .objectFit(ImageFit.Cover)
+                .onClick(() => { this.previewImage = pm; })
+            } else {
+              Column() {
+                LoadingProgress().width(20).height(20).color(Constants.COLOR_PRIMARY)
+              }
+              .width('100%').height(100)
+              .justifyContent(FlexAlign.Center)
+              .borderRadius(8)
+              .backgroundColor(Constants.COLOR_BG)
+            }
+          }
+          .width('31%')
+          .margin({ right: '2%', bottom: 8 })
+        }, (pm: image.PixelMap | null, idx: number) => 'det-' + this.detailTaskId + '-' + idx + '-' + (pm != null ? '1' : '0'))
+      }
+      .width('100%')
+    }
+    .width('100%')
+    .margin({ bottom: 16 })
+    .alignItems(HorizontalAlign.Start)
   }
 
   @Builder
@@ -1181,16 +1320,109 @@ struct Index {
     this.recording = false;
     this.extracting = false;
     this.recordError = '';
+    this.draftImages = [];
+    this.draftThumbs = [];
+    this.uploadingImg = false;
     this.showCreate = true;
+  }
+
+  // 选图 → 逐张转码降采样 → 上传中继 → 记录元数据+预览缩略图
+  async onAddImages(): Promise<void> {
+    if (this.uploadingImg) {
+      return;
+    }
+    const remain = 9 - this.draftImages.length;
+    if (remain <= 0) {
+      this.toast('最多 9 张');
+      return;
+    }
+    const uris = await ImageService.pick(remain);
+    if (uris.length === 0) {
+      return;
+    }
+    this.uploadingImg = true;
+    let failed = 0;
+    for (let i = 0; i < uris.length; i++) {
+      const prep = await ImageService.prepare(uris[i]);
+      if (!prep) {
+        failed++;
+        continue;
+      }
+      const pmv = prep.pixelMap;
+      if (!pmv) {
+        failed++;
+        continue;
+      }
+      const meta = await RelayService.getInstance().uploadImage(
+        prep.jpeg, 'image/jpeg', AppConfig.FAMILY_ID, prep.w, prep.h);
+      if (meta && meta.id.length > 0) {
+        this.draftImages = this.draftImages.concat([meta]);
+        this.draftThumbs = this.draftThumbs.concat([pmv]);
+      } else {
+        failed++;
+      }
+    }
+    this.uploadingImg = false;
+    if (failed > 0) {
+      this.toast('有 ' + failed + ' 张上传失败');
+    }
+  }
+
+  removeDraftImage(idx: number): void {
+    if (idx < 0 || idx >= this.draftImages.length) {
+      return;
+    }
+    const imgs = this.draftImages.slice();
+    const thumbs = this.draftThumbs.slice();
+    imgs.splice(idx, 1);
+    thumbs.splice(idx, 1);
+    this.draftImages = imgs;
+    this.draftThumbs = thumbs;
   }
 
   openDetail(item: TaskItem): void {
     this.detailTaskId = item.id;
+    this.detailImages = [];
     this.showDetail = true;
+    this.loadDetailImages(item);
+  }
+
+  // 逐张下载并解码任务图片，边下边显示（先铺占位，解码好就替换）
+  private async loadDetailImages(item: TaskItem): Promise<void> {
+    if (!item.images || item.images.length === 0) {
+      return;
+    }
+    const slots: (image.PixelMap | null)[] = [];
+    for (let i = 0; i < item.images.length; i++) {
+      slots.push(null);
+    }
+    this.detailImages = slots.slice();
+    this.detailImgLoading = true;
+    const loadingFor = this.detailTaskId;
+    for (let i = 0; i < item.images.length; i++) {
+      const bytes = await RelayService.getInstance().downloadImage(item.images[i].id);
+      // 详情已切走则丢弃结果
+      if (this.detailTaskId !== loadingFor) {
+        return;
+      }
+      if (bytes) {
+        const pm = await ImageService.decode(bytes);
+        if (this.detailTaskId !== loadingFor) {
+          return;
+        }
+        if (pm) {
+          const next = this.detailImages.slice();
+          next[i] = pm;
+          this.detailImages = next;
+        }
+      }
+    }
+    this.detailImgLoading = false;
   }
 
   closeDetail(): void {
     this.showDetail = false;
+    this.detailImages = [];
   }
 
   private currentDetailTask(): TaskItem {
@@ -1235,6 +1467,7 @@ struct Index {
     t.deadline = this.draftDeadline;
     t.status = TaskStatus.PENDING;
     t.reminder = new ReminderConfig();
+    t.images = this.draftImages.slice();
     t.createdAt = Date.now();
     // 先存本地（离线也能用）
     await TaskStore.getInstance().upsert(t);
@@ -1484,10 +1717,11 @@ struct Index {
 
   private directionLabel(item: TaskItem): string {
     const st = this.statusLabel(item.status);
+    const img = item.images.length > 0 ? (' · 📷' + item.images.length) : '';
     if (this.isReceiver(item)) {
-      return '来自 ' + this.displayName(item.fromUserId) + ' · ' + st;
+      return '来自 ' + this.displayName(item.fromUserId) + ' · ' + st + img;
     }
-    return '给 ' + this.displayName(item.toUserId) + ' · ' + st;
+    return '给 ' + this.displayName(item.toUserId) + ' · ' + st + img;
   }
 
   openArchive(): void {

@@ -22,6 +22,15 @@ export class NegotiationMsg {
   at: number = 0;
 }
 
+// 一张图片附件元数据（字节不入任务，只存 id 等；真实字节走 /uploads/{id}）
+export class TaskImage {
+  id: string = '';                  // 中继分配的附件 id
+  mime: string = 'image/jpeg';
+  w: number = 0;                    // 像素宽（用于占位/布局）
+  h: number = 0;                    // 像素高
+  size: number = 0;                 // 字节数
+}
+
 // 一条待办
 export class TaskItem {
   id: string = '';
@@ -36,6 +45,7 @@ export class TaskItem {
   status: string = TaskStatus.PENDING;
   reminder: ReminderConfig = new ReminderConfig();
   negotiation: NegotiationMsg[] = [];
+  images: TaskImage[] = [];         // 图片附件（跨端同步，整段数组覆盖）
   reminderIds: number[] = [];       // 本地排定的提醒 id（仅本机，不参与云端同步）
   archived: boolean = false;        // 已归档（完成即自动归档，跨端同步）
   deleted: boolean = false;         // 软删墓碑标志（来自中继；本地见到即移除该任务）

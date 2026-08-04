@@ -131,4 +131,4 @@ User message:
 
 ## 家庭配对
 
-首次启动填写 `familyId`，选择 `userId`，并保存显示名 `userName`。两端固定使用 `wife` / `husband` 两个 userId。iOS 默认 `wife`，默认收件人 `husband`；HarmonyOS 默认相反。
+首次启动填写 `familyId`，选择 `userId`，并保存显示名 `userName`。两端固定使用 `wife` / `husband` 两个 userId，对方身份由当前身份自动推导。HarmonyOS 身份必须保存在运行时 Profile 中，同一个 HAP 可分别配置为老公或老婆；不得再从 `AppConfig` 写死本机身份。

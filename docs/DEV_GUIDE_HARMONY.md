@@ -23,7 +23,7 @@ DevEco Studio → **Open**，选择 `Paihuor/harmony` 这个**子目录**（不�
 `entry/src/main/ets/config/AppConfig.ets` 含密钥，已被 `.gitignore` 排除，clone 下来**没有**，必须手动创建：
 
 1. 复制同目录的 `AppConfig.example.ets` 为 `AppConfig.ets`；
-2. 按模板填入真实值（MiniMax Key、中继地址、中继密钥、familyId 等）。
+2. 按模板填入真实值（MiniMax Key、中继地址、中继密钥、默认 familyId 等）。本机身份不写死在这里。
 
 > 真实值不放仓库。问周翔要那份「AppConfig.ets 实配」直接整段粘贴即可。
 > - `RELAY_BASE_URL`：当前公网中继地址（SakuraFrp 东京隧道，形如 `http://frp-xxx.com:端口`）。
@@ -41,7 +41,8 @@ DevEco Studio → **Open**，选择 `Paihuor/harmony` 这个**子目录**（不�
 
 1. USB 连上 Pura70，DevEco 右上角选到该设备；
 2. 点 **Run**（▶）编译 + 安装 + 启动；
-3. 首次启动按系统弹窗授予 **麦克风**（语音）、**通知**（提醒）权限。
+3. 首次启动填写家庭配对码，并明确选择本机是“老公”还是“老婆”；同一个 HAP 可以装在两台手机上使用；
+4. 按系统弹窗授予 **麦克风**（语音）、**通知**（提醒）权限。
 
 > 若 Pura70 上已装过**别的电脑**签名的同包名版本，会因签名不一致装不上 —— 先在手机上卸载旧的「派活儿」再装。
 
@@ -67,4 +68,5 @@ cd <工程>\harmony
 - **MiniMax 必须用 `MiniMax-M3` + 请求体 `thinking:{type:"disabled"}`**：M2.7 系列强制思考、慢；M3 关思考后干净 JSON、省 token、更快。
 - 鸿蒙 http 须声明 `ohos.permission.INTERNET`（已在 module.json5）。
 - **后端是 175 自建 Node 中继，不是 LeanCloud**（与 `CONTRACT.md` 早期约定不同，详见 `INTEROP.md`）。
+- 家庭身份保存在 Preferences 的 `family_profile` 中。左上角菜单可重新进入家庭设置；修改身份后会重新登记 Push Token。
 - SakuraFrp 国内节点封明文 HTTP（备案合规），故走海外（东京）节点；若隧道迁移节点 / SakuraFrp 改节点域名，`RELAY_BASE_URL` 要同步更新并重打包。

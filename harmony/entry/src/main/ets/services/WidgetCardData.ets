@@ -5,6 +5,7 @@ import { preferences } from '@kit.ArkData';
 import { formProvider, formBindingData } from '@kit.FormKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { TaskItem, TaskStatus } from '../models/TaskModels';
+import { readFamilyProfileSync } from './ProfileService';
 
 const TAG = 'WidgetCardData';
 const PREF = 'paihuor_store';
@@ -27,7 +28,12 @@ function readActive(context: common.Context): TaskItem[] {
     const store = preferences.getPreferencesSync(context, { name: PREF });
     const raw = store.getSync(TASKS_KEY, '[]') as string;
     const all = JSON.parse(raw) as TaskItem[];
-    const act = all.filter((t: TaskItem) => !t.archived && t.status !== TaskStatus.DONE && !t.deleted);
+    const profile = readFamilyProfileSync(context);
+    if (!profile) {
+      return [];
+    }
+    const act = all.filter((t: TaskItem) => profile.isTaskRelevant(t.familyId, t.fromUserId, t.toUserId)
+      && !t.archived && t.status !== TaskStatus.DONE && !t.deleted);
     act.sort((a: TaskItem, b: TaskItem) => b.createdAt - a.createdAt);
     return act;
   } catch (err) {

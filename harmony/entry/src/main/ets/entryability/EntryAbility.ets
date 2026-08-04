@@ -3,6 +3,7 @@ import { hilog } from '@kit.PerformanceAnalysisKit';
 import { window } from '@kit.ArkUI';
 import { TaskStore } from '../services/TaskStore';
 import { DeviceService } from '../services/DeviceService';
+import { ProfileService } from '../services/ProfileService';
 
 const DOMAIN = 0x0000;
 
@@ -15,8 +16,7 @@ export default class EntryAbility extends UIAbility {
     }
     // 启动即初始化本地任务存储
     TaskStore.getInstance().init(this.context);
-    // 取华为 Push Token 并注册到中继（关闭态收推送的基础）
-    DeviceService.getInstance().ensureRegisteredToken();
+    this.initializeProfile();
     // 点击通知冷启动：参数在 want.parameters
     if (want.parameters) {
       hilog.info(DOMAIN, 'PushKit', 'cold start params: %{public}s', JSON.stringify(want.parameters));
@@ -56,11 +56,20 @@ export default class EntryAbility extends UIAbility {
   onForeground(): void {
     // Ability has brought to foreground
     hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onForeground');
-    DeviceService.getInstance().ensureRegisteredToken();
+    ProfileService.getInstance().whenReady().then(() => {
+      DeviceService.getInstance().ensureRegisteredToken();
+    });
   }
 
   onBackground(): void {
     // Ability has back to background
     hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onBackground');
+  }
+
+  private async initializeProfile(): Promise<void> {
+    await ProfileService.getInstance().init(this.context);
+    if (ProfileService.getInstance().getProfile()) {
+      await DeviceService.getInstance().ensureRegisteredToken();
+    }
   }
 }

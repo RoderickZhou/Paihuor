@@ -4,6 +4,7 @@ import { hilog } from '@kit.PerformanceAnalysisKit';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { AppConfig } from '../config/AppConfig';
 import { RelayService } from './RelayService';
+import { ProfileService } from './ProfileService';
 
 const TAG = 'DeviceService';
 
@@ -27,6 +28,7 @@ export class DeviceService {
   private inFlight: boolean = false;
   private lastAttemptAt: number = 0;
   private registeredToken: string = '';
+  private registeredProfileKey: string = '';
 
   static getInstance(): DeviceService {
     if (!DeviceService.instance) {
@@ -58,12 +60,18 @@ export class DeviceService {
         return false;
       }
       hilog.info(0x0000, TAG, 'pushToken length=' + token.length);
-      if (!force && token === this.registeredToken) {
+      const profile = ProfileService.getInstance().getProfile();
+      if (!profile) {
+        return false;
+      }
+      const profileKey = profile.familyId + ':' + profile.userId;
+      if (!force && token === this.registeredToken && profileKey === this.registeredProfileKey) {
         return true;
       }
-      const ok = await this.registerToken(token);
+      const ok = await this.registerToken(token, profile.familyId, profile.userId);
       if (ok) {
         this.registeredToken = token;
+        this.registeredProfileKey = profileKey;
       }
       return ok;
     } catch (err) {
@@ -75,7 +83,7 @@ export class DeviceService {
     }
   }
 
-  async registerToken(pushToken: string): Promise<boolean> {
+  async registerToken(pushToken: string, familyId: string, userId: string): Promise<boolean> {
     if (!pushToken || pushToken.length === 0) {
       return false;
     }
@@ -83,8 +91,8 @@ export class DeviceService {
     const c = http.createHttp();
     try {
       const body: DeviceReg = {
-        familyId: AppConfig.FAMILY_ID,
-        userId: AppConfig.MY_USER_ID,
+        familyId: familyId,
+        userId: userId,
         platform: 'harmony',
         pushToken: pushToken
       };

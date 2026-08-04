@@ -626,6 +626,10 @@ const server = http.createServer(async (req, res) => {
     const d = await readBody(req);
     if (!d.pushToken || !d.userId || !d.familyId) return send(res, 400, { error: 'missing fields' });
     const platform = d.platform || 'harmony';
+    // A physical push token belongs to one current profile. Remove an old role/family binding
+    // before registering the new one so changing identity cannot receive both users' pushes.
+    db.prepare('DELETE FROM devices WHERE pushToken=? AND (familyId<>? OR userId<>? OR platform<>?)')
+      .run(d.pushToken, d.familyId, d.userId, platform);
     db.prepare('INSERT OR REPLACE INTO devices (familyId,userId,platform,pushToken,updatedAt) VALUES (?,?,?,?,?)')
       .run(d.familyId, d.userId, platform, d.pushToken, Date.now());
     const c = db.prepare('SELECT COUNT(*) c FROM devices').get().c;

@@ -12,8 +12,6 @@ export class AppConfig {
   static readonly RELAY_LAN_URL: string = 'http://10.1.30.175:8787'; // 同局域网直连(快)，连不上自动回退公网
   static readonly RELAY_KEY: string = '<填 中继密钥 PAIHUOR_KEY>';
 
-  // 家庭配对（两端填同一个 familyId；本机=老公/Pura70，对方=老婆/iPhone）
+  // 首次配对页的默认家庭码；本机身份由用户在 App 内选择并保存，不在安装包中写死。
   static readonly FAMILY_ID: string = 'fam-xxx';
-  static readonly MY_USER_ID: string = 'husband';
-  static readonly OTHER_USER_ID: string = 'wife';
 }

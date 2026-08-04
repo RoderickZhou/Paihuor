@@ -12,6 +12,8 @@ import { NotificationService } from '../services/NotificationService';
 import { DeviceService } from '../services/DeviceService';
 import { updateAllCards } from '../services/WidgetCardData';
 import { AppConfig } from '../config/AppConfig';
+import { FamilyProfile, FamilyRole } from '../models/FamilyProfile';
+import { ProfileService } from '../services/ProfileService';
 
 @Entry
 @Component
@@ -57,6 +59,15 @@ struct Index {
   // 任务详情半屏
   @State showDetail: boolean = false;
   @State detailTaskId: string = '';
+  @State profileReady: boolean = false;
+  @State profileConfigured: boolean = false;
+  @State showProfileSetup: boolean = false;
+  @State familyId: string = '';
+  @State myUserId: string = '';
+  @State otherUserId: string = '';
+  @State setupFamilyId: string = AppConfig.FAMILY_ID;
+  @State setupUserId: string = '';
+  @State setupUserName: string = '';
   private lastSync: number = 0;
   private pollTimer: number = -1;
   private sessionStartedAt: number = Date.now();
@@ -64,10 +75,22 @@ struct Index {
   private firstPollDone: boolean = false; // 首轮只建立基线，不弹通知，避免启动刷屏
 
   async aboutToAppear(): Promise<void> {
+    const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
+    await ProfileService.getInstance().init(ctx);
+    const profile = ProfileService.getInstance().getProfile();
+    this.profileReady = true;
+    if (!profile) {
+      this.profileConfigured = false;
+      return;
+    }
+    this.applyProfile(profile);
+    await this.startProfileSession(ctx);
+  }
+
+  private async startProfileSession(ctx: common.UIAbilityContext): Promise<void> {
     await TaskStore.getInstance().whenReady();
     // 申请通知权限（角标/横幅需要）
     try {
-      const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
       const enabled = await NotificationService.getInstance().ensureEnabled(ctx);
       if (!enabled) {
         this.toast('请允许通知，否则新任务不会弹窗');
@@ -87,8 +110,8 @@ struct Index {
 
   refresh(): void {
     const store = TaskStore.getInstance();
-    const active = store.getActive();
-    const arch = store.getArchived();
+    const active = store.getActive().filter((t: TaskItem) => this.isRelevantTask(t));
+    const arch = store.getArchived().filter((t: TaskItem) => this.isRelevantTask(t));
     this.archivedCount = arch.length;
     let doneU = 0;
     let unread = 0;
@@ -98,7 +121,7 @@ struct Index {
         doneU++;
       }
       // 未读 = 派给我、还没点「收到」的活
-      if (t.toUserId === AppConfig.MY_USER_ID && t.status === TaskStatus.PENDING) {
+      if (t.toUserId === this.myUserId && t.status === TaskStatus.PENDING) {
         unread++;
       }
     }
@@ -130,10 +153,10 @@ struct Index {
 
   // 轮询中继，把对方建/改的任务合并到本地
   async poll(): Promise<void> {
-    if (!RelayService.getInstance().enabled()) {
+    if (!this.profileConfigured || !RelayService.getInstance().enabled()) {
       return;
     }
-    const remote = await RelayService.getInstance().list(AppConfig.FAMILY_ID, this.lastSync);
+    const remote = await RelayService.getInstance().list(this.familyId, this.lastSync);
     if (remote.length === 0) {
       this.firstPollDone = true;
       return;
@@ -179,7 +202,7 @@ struct Index {
   }
 
   private shouldNotifyNewTask(t: TaskItem): boolean {
-    return t.toUserId === AppConfig.MY_USER_ID
+    return t.toUserId === this.myUserId
       && t.status === TaskStatus.PENDING
       && !t.archived
       && !t.deleted;
@@ -206,7 +229,78 @@ struct Index {
     await RelayService.getInstance().update(item.objectId, patch);
   }
 
+  private applyProfile(profile: FamilyProfile): void {
+    this.familyId = profile.familyId;
+    this.myUserId = profile.userId;
+    this.otherUserId = profile.counterpartUserId();
+    this.setupFamilyId = profile.familyId;
+    this.setupUserId = profile.userId;
+    this.setupUserName = profile.displayName();
+    this.profileConfigured = true;
+  }
+
+  private isRelevantTask(item: TaskItem): boolean {
+    const profile = ProfileService.getInstance().getProfile();
+    return profile !== null
+      && profile.isTaskRelevant(item.familyId, item.fromUserId, item.toUserId);
+  }
+
+  private canSaveProfile(): boolean {
+    return this.setupFamilyId.trim().length > 0
+      && (this.setupUserId === FamilyRole.WIFE || this.setupUserId === FamilyRole.HUSBAND);
+  }
+
+  private openProfileSettings(): void {
+    const profile = ProfileService.getInstance().getProfile();
+    if (profile) {
+      this.setupFamilyId = profile.familyId;
+      this.setupUserId = profile.userId;
+      this.setupUserName = profile.displayName();
+    }
+    this.showProfileSetup = true;
+  }
+
+  private async saveProfile(): Promise<void> {
+    if (!this.canSaveProfile()) {
+      return;
+    }
+    try {
+      const profile = await ProfileService.getInstance().save(
+        this.setupFamilyId, this.setupUserId, this.setupUserName);
+      this.stopPolling();
+      this.lastSync = 0;
+      this.firstPollDone = false;
+      this.notifiedObjectIds = [];
+      this.sessionStartedAt = Date.now();
+      this.applyProfile(profile);
+      this.showProfileSetup = false;
+      const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
+      await this.startProfileSession(ctx);
+      this.toast('家庭身份已保存');
+    } catch (err) {
+      this.toast('保存失败，请检查家庭配对码');
+    }
+  }
+
   build() {
+    if (!this.profileReady) {
+      Column() {
+        Text('派活儿').fontSize(30).fontWeight(FontWeight.Bold).fontColor(Constants.COLOR_TEXT_PRIMARY)
+        Text('正在准备家庭信息').fontSize(15).fontColor(Constants.COLOR_TEXT_SECONDARY).margin({ top: 10 })
+        LoadingProgress().width(34).height(34).color(Constants.COLOR_PRIMARY).margin({ top: 24 })
+      }
+      .width('100%').height('100%')
+      .justifyContent(FlexAlign.Center).alignItems(HorizontalAlign.Center)
+      .backgroundColor(Constants.COLOR_BG)
+    } else if (!this.profileConfigured) {
+      this.ProfileSetup(false)
+    } else {
+      this.MainContent()
+    }
+  }
+
+  @Builder
+  MainContent() {
     Stack({ alignContent: Alignment.BottomEnd }) {
       Column() {
         // 顶部标题 + 快捷入口
@@ -287,9 +381,88 @@ struct Index {
         this.ImagePreviewOverlay()
       }
 
+      if (this.showProfileSetup) {
+        this.ProfileSetup(true)
+      }
+
     }
     .width('100%')
     .height('100%')
+  }
+
+  @Builder
+  ProfileSetup(canCancel: boolean) {
+    Column() {
+      Row() {
+        if (canCancel) {
+          Button('取消')
+            .type(ButtonType.Normal)
+            .fontColor(Constants.COLOR_TEXT_SECONDARY)
+            .backgroundColor(Color.Transparent)
+            .onClick(() => { this.showProfileSetup = false; })
+        }
+        Blank()
+        Text(canCancel ? '家庭设置' : '欢迎使用派活儿')
+          .fontSize(24).fontWeight(FontWeight.Bold).fontColor(Constants.COLOR_TEXT_PRIMARY)
+        Blank()
+        if (canCancel) {
+          Text('完成').fontSize(15).fontColor(Color.Transparent)
+        }
+      }
+      .width('100%')
+
+      Text(canCancel ? '修改后会重新登记本机通知身份' : '两台手机填写同一个家庭配对码，再分别选择自己的身份。')
+        .fontSize(14).fontColor(Constants.COLOR_TEXT_SECONDARY)
+        .lineHeight(22).margin({ top: 14, bottom: 28 })
+
+      Text('家庭配对码').fontSize(14).fontWeight(FontWeight.Medium).fontColor(Constants.COLOR_TEXT_PRIMARY)
+        .width('100%').textAlign(TextAlign.Start)
+      TextInput({ placeholder: '例如 fam-zx-001', text: this.setupFamilyId })
+        .height(52).fontSize(16).margin({ top: 8, bottom: 24 })
+        .backgroundColor(Color.White).borderRadius(8)
+        .onChange((value: string) => { this.setupFamilyId = value; })
+
+      Text('我是').fontSize(14).fontWeight(FontWeight.Medium).fontColor(Constants.COLOR_TEXT_PRIMARY)
+        .width('100%').textAlign(TextAlign.Start)
+      Row({ space: 12 }) {
+        this.RoleButton(FamilyRole.HUSBAND, '老公')
+        this.RoleButton(FamilyRole.WIFE, '老婆')
+      }
+      .width('100%').margin({ top: 8, bottom: 24 })
+
+      Text('显示名称（可选）').fontSize(14).fontWeight(FontWeight.Medium).fontColor(Constants.COLOR_TEXT_PRIMARY)
+        .width('100%').textAlign(TextAlign.Start)
+      TextInput({ placeholder: this.setupUserId === FamilyRole.WIFE ? '老婆' : '老公', text: this.setupUserName })
+        .height(52).fontSize(16).margin({ top: 8 })
+        .backgroundColor(Color.White).borderRadius(8)
+        .onChange((value: string) => { this.setupUserName = value; })
+
+      Button('保存并继续')
+        .type(ButtonType.Normal).fontSize(16).fontColor(Color.White)
+        .width('100%').height(52).borderRadius(8)
+        .backgroundColor(this.canSaveProfile() ? Constants.COLOR_PRIMARY : Constants.COLOR_TEXT_SECONDARY)
+        .margin({ top: 32 })
+        .enabled(this.canSaveProfile())
+        .onClick(() => { this.saveProfile(); })
+    }
+    .width('100%').height('100%')
+    .padding({ left: 28, right: 28, top: 34, bottom: 30 })
+    .backgroundColor(Constants.COLOR_BG)
+  }
+
+  @Builder
+  RoleButton(userId: string, label: string) {
+    Button(label)
+      .type(ButtonType.Normal).fontSize(16).fontWeight(FontWeight.Medium)
+      .fontColor(this.setupUserId === userId ? Color.White : Constants.COLOR_TEXT_PRIMARY)
+      .layoutWeight(1).height(52).borderRadius(8)
+      .backgroundColor(this.setupUserId === userId ? Constants.COLOR_PRIMARY : Color.White)
+      .onClick(() => {
+        this.setupUserId = userId;
+        if (this.setupUserName.trim().length === 0) {
+          this.setupUserName = FamilyRole.displayName(userId);
+        }
+      })
   }
 
   // 全屏看图：点任意处关闭
@@ -325,6 +498,11 @@ struct Index {
     }
     .width(52)
     .height(52)
+    .onClick(() => {
+      if (kind === 'menu') {
+        this.openProfileSettings();
+      }
+    })
   }
 
   @Builder
@@ -1086,7 +1264,7 @@ struct Index {
       Row() {
         Text(this.displayName(m.fromUserId))
           .fontSize(13).fontWeight(FontWeight.Medium)
-          .fontColor(m.fromUserId === AppConfig.MY_USER_ID ? Constants.COLOR_PRIMARY_DARK : Constants.COLOR_TEXT_PRIMARY)
+          .fontColor(m.fromUserId === this.myUserId ? Constants.COLOR_PRIMARY_DARK : Constants.COLOR_TEXT_PRIMARY)
         Blank()
         Text(Constants.formatDeadline(m.at))
           .fontSize(11).fontColor(Constants.COLOR_TEXT_SECONDARY)
@@ -1099,7 +1277,7 @@ struct Index {
         Row() {
           Text('建议改到 ' + Constants.formatDeadline(m.proposedDeadline))
             .fontSize(12).fontColor(Constants.COLOR_PRIMARY).layoutWeight(1)
-          if (m.fromUserId !== AppConfig.MY_USER_ID && m.proposedDeadline !== this.negDeadlineShown) {
+          if (m.fromUserId !== this.myUserId && m.proposedDeadline !== this.negDeadlineShown) {
             Button('采纳')
               .type(ButtonType.Normal).fontSize(12).fontColor(Color.White)
               .backgroundColor(Constants.COLOR_PRIMARY).height(30).borderRadius(8)
@@ -1354,7 +1532,7 @@ struct Index {
         continue;
       }
       const meta = await RelayService.getInstance().uploadImage(
-        prep.jpeg, 'image/jpeg', AppConfig.FAMILY_ID, prep.w, prep.h);
+        prep.jpeg, 'image/jpeg', this.familyId, prep.w, prep.h);
       if (meta && meta.id.length > 0) {
         this.draftImages = this.draftImages.concat([meta]);
         this.draftThumbs = this.draftThumbs.concat([pmv]);
@@ -1458,9 +1636,9 @@ struct Index {
     }
     const t = new TaskItem();
     t.id = '' + Date.now() + '_' + Math.floor(Math.random() * 100000);
-    t.familyId = AppConfig.FAMILY_ID;
-    t.fromUserId = AppConfig.MY_USER_ID;
-    t.toUserId = AppConfig.OTHER_USER_ID;
+    t.familyId = this.familyId;
+    t.fromUserId = this.myUserId;
+    t.toUserId = this.otherUserId;
     t.rawText = this.asrText.trim().length > 0 ? this.asrText.trim() : this.draftTitle.trim();
     t.title = this.draftTitle.trim();
     t.detail = this.draftDetail;
@@ -1553,7 +1731,7 @@ struct Index {
       return;
     }
     const msg = new NegotiationMsg();
-    msg.fromUserId = AppConfig.MY_USER_ID;
+    msg.fromUserId = this.myUserId;
     msg.text = text;
     msg.proposedDeadline = this.negProposedDeadline;
     msg.at = Date.now();
@@ -1674,7 +1852,7 @@ struct Index {
     await ReminderService.getInstance().cancelForTask(item.reminderIds);
     // 先通知中继软删（对端轮询到墓碑后本地移除），再删本机；带上发起人
     if (item.objectId.length > 0) {
-      await RelayService.getInstance().remove(item.objectId, AppConfig.MY_USER_ID);
+      await RelayService.getInstance().remove(item.objectId, this.myUserId);
     }
     await TaskStore.getInstance().remove(item.id);
     this.showDetail = false;
@@ -1683,18 +1861,18 @@ struct Index {
   }
 
   private isCreator(item: TaskItem): boolean {
-    return item.fromUserId === AppConfig.MY_USER_ID;
+    return item.fromUserId === this.myUserId;
   }
 
   private isReceiver(item: TaskItem): boolean {
-    return item.toUserId === AppConfig.MY_USER_ID;
+    return item.toUserId === this.myUserId;
   }
 
   private latestNegotiationIsMine(item: TaskItem): boolean {
     if (item.negotiation.length === 0) {
       return false;
     }
-    return item.negotiation[item.negotiation.length - 1].fromUserId === AppConfig.MY_USER_ID;
+    return item.negotiation[item.negotiation.length - 1].fromUserId === this.myUserId;
   }
 
   private needsNegotiationReply(item: TaskItem): boolean {

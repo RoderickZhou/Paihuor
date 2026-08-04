@@ -7,6 +7,12 @@ enum TaskSyncState: Equatable {
     case failed(String)
 }
 
+enum TaskAttachmentError: LocalizedError {
+    case unavailable
+
+    var errorDescription: String? { "当前同步服务不支持图片附件" }
+}
+
 protocol TaskSyncServicing {
     var providerName: String { get }
 
@@ -14,6 +20,8 @@ protocol TaskSyncServicing {
     func upsertTask(_ task: PaihuorTask, for profile: FamilyProfile) async throws -> PaihuorTask
     func deleteTask(_ task: PaihuorTask, for profile: FamilyProfile) async throws -> PaihuorTask
     func deleteTasks(for profile: FamilyProfile) async throws
+    func uploadImage(_ data: Data, mime: String, familyId: String, width: Int, height: Int) async throws -> TaskImage
+    func downloadImage(id: String) async throws -> Data
 }
 
 actor MockTaskSyncService: TaskSyncServicing {
@@ -79,6 +87,14 @@ actor MockTaskSyncService: TaskSyncServicing {
 
         let remoteTasks = try load().filter { $0.familyId != profile.familyId }
         try save(remoteTasks)
+    }
+
+    func uploadImage(_ data: Data, mime: String, familyId: String, width: Int, height: Int) async throws -> TaskImage {
+        throw TaskAttachmentError.unavailable
+    }
+
+    func downloadImage(id: String) async throws -> Data {
+        throw TaskAttachmentError.unavailable
     }
 
     private func simulateLatency() async throws {
@@ -191,6 +207,26 @@ actor PaihuorRelayTaskSyncService: TaskSyncServicing {
         // Clearing remains a local reset until the service adds a delete endpoint.
     }
 
+    func uploadImage(_ data: Data, mime: String, familyId: String, width: Int, height: Int) async throws -> TaskImage {
+        guard var components = URLComponents(url: await endpoint("uploads"), resolvingAgainstBaseURL: false) else {
+            throw PaihuorRelayError.invalidURL
+        }
+        components.queryItems = [
+            URLQueryItem(name: "familyId", value: familyId),
+            URLQueryItem(name: "w", value: String(width)),
+            URLQueryItem(name: "h", value: String(height))
+        ]
+        guard let url = components.url else {
+            throw PaihuorRelayError.invalidURL
+        }
+        let response = try await send(method: "POST", url: url, body: data, contentType: mime)
+        return try decoder.decode(TaskImage.self, from: response)
+    }
+
+    func downloadImage(id: String) async throws -> Data {
+        try await send(method: "GET", url: await endpoint("uploads", id))
+    }
+
     private func createTask(_ task: PaihuorTask) async throws -> PaihuorTask {
         let body = try encoder.encode(RelayTaskDTO(
             task: task,
@@ -274,6 +310,7 @@ actor PaihuorRelayTaskSyncService: TaskSyncServicing {
         method: String,
         url: URL,
         body: Data? = nil,
+        contentType: String = "application/json",
         attempt: Int = 0
     ) async throws -> Data {
         var request = URLRequest(url: url)
@@ -283,7 +320,7 @@ actor PaihuorRelayTaskSyncService: TaskSyncServicing {
 
         if let body {
             request.httpBody = body
-            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.setValue(contentType, forHTTPHeaderField: "Content-Type")
         }
 
         do {
@@ -312,7 +349,13 @@ actor PaihuorRelayTaskSyncService: TaskSyncServicing {
             guard attempt < 2 else { throw error }
             let delay = UInt64(attempt + 1) * 400_000_000
             try? await Task.sleep(nanoseconds: delay)
-            return try await send(method: method, url: url, body: body, attempt: attempt + 1)
+            return try await send(
+                method: method,
+                url: url,
+                body: body,
+                contentType: contentType,
+                attempt: attempt + 1
+            )
         }
     }
 }
@@ -329,6 +372,7 @@ private struct RelayTaskDTO: Codable {
     var status: String?
     var reminder: TaskReminder?
     var negotiation: [RelayNegotiationDTO]?
+    var images: [TaskImage]?
     var receivedAt: Int64?
     var doneAt: Int64?
     var archived: Bool?
@@ -356,6 +400,9 @@ private struct RelayTaskDTO: Codable {
         self.status = task.status.rawValue
         self.reminder = task.reminder
         self.negotiation = task.negotiation.map(RelayNegotiationDTO.init(message:))
+        // nil means an older local cache has never seen this field; omit it so a status-only
+        // update cannot erase attachments that already exist on the relay.
+        self.images = task.images
         self.receivedAt = task.receivedAt
         self.doneAt = task.doneAt
         self.archived = task.archived
@@ -394,6 +441,7 @@ private struct RelayTaskDTO: Codable {
             status: status.flatMap(TaskStatus.init(rawValue:)) ?? fallback?.status ?? .pending,
             reminder: reminder ?? fallback?.reminder ?? .default,
             negotiation: negotiation?.map { $0.message() } ?? fallback?.negotiation ?? [],
+            images: images ?? fallback?.images ?? [],
             receivedAt: receivedAt ?? fallback?.receivedAt ?? 0,
             doneAt: doneAt ?? fallback?.doneAt ?? 0,
             archived: isArchived,

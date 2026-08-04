@@ -80,6 +80,7 @@ final class TaskStore: ObservableObject {
         title: String,
         detail: String,
         deadline: Int64,
+        images: [TaskImage] = [],
         toUserId: UserRole,
         profile: FamilyProfile
     ) -> PaihuorTask {
@@ -90,7 +91,8 @@ final class TaskStore: ObservableObject {
             rawText: rawText,
             title: title,
             detail: detail,
-            deadline: deadline
+            deadline: deadline,
+            images: images
         )
 
         tasks.insert(task, at: 0)
@@ -208,6 +210,26 @@ final class TaskStore: ObservableObject {
         Task {
             await clearRemoteTasks(for: profile)
         }
+    }
+
+    func uploadImage(
+        _ data: Data,
+        mime: String,
+        width: Int,
+        height: Int,
+        profile: FamilyProfile
+    ) async throws -> TaskImage {
+        try await syncService().uploadImage(
+            data,
+            mime: mime,
+            familyId: profile.familyId,
+            width: width,
+            height: height
+        )
+    }
+
+    func downloadImage(_ image: TaskImage) async throws -> Data {
+        try await syncService().downloadImage(id: image.id)
     }
 
     private func update(_ objectId: String, mutate: (inout PaihuorTask) -> Void) -> PaihuorTask? {

@@ -84,6 +84,12 @@ struct TaskCardView: View {
                 .labelStyle(.titleAndIcon)
                 .lineLimit(1)
 
+                if let images = task.images, !images.isEmpty {
+                    Label("\(images.count) 张图片", systemImage: "photo")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(Color.paiPrimary)
+                }
+
                 if needsNegotiationReply, let latestNegotiation {
                     Text(latestNegotiation.text)
                         .font(.caption)

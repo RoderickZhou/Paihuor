@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 struct TaskDetailSheet: View {
     @Environment(\.dismiss) private var dismiss
@@ -65,6 +66,10 @@ struct TaskDetailSheet: View {
                 VStack(alignment: .leading, spacing: 22) {
                     metaRow
                     titleBlock
+
+                    if let images = task.images, !images.isEmpty {
+                        TaskImageGallery(images: images)
+                    }
 
                     if let latestNegotiation {
                         negotiationBlock(latestNegotiation)
@@ -354,5 +359,46 @@ struct TaskDetailSheet: View {
         guard let profile else { return }
         taskStore.archiveTask(task, profile: profile)
         dismiss()
+    }
+}
+
+private struct TaskImageGallery: View {
+    @EnvironmentObject private var taskStore: TaskStore
+    @State private var imageData: [String: Data] = [:]
+
+    let images: [TaskImage]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Label("图片 · \(images.count) 张", systemImage: "photo.on.rectangle")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(Color.paiTextSecondary)
+
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 104), spacing: 10)], spacing: 10) {
+                ForEach(images) { attachment in
+                    Group {
+                        if let data = imageData[attachment.id], let image = UIImage(data: data) {
+                            Image(uiImage: image)
+                                .resizable()
+                                .scaledToFill()
+                        } else {
+                            ZStack {
+                                Color.paiPrimaryLight.opacity(0.45)
+                                ProgressView()
+                            }
+                        }
+                    }
+                    .frame(height: 116)
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                }
+            }
+        }
+        .task(id: images.map(\.id).joined(separator: ",")) {
+            for attachment in images where imageData[attachment.id] == nil {
+                if let data = try? await taskStore.downloadImage(attachment) {
+                    imageData[attachment.id] = data
+                }
+            }
+        }
     }
 }

@@ -58,6 +58,14 @@ struct NegotiationMessage: Codable, Equatable, Identifiable {
     }
 }
 
+struct TaskImage: Codable, Equatable, Identifiable {
+    var id: String
+    var mime: String
+    var w: Int
+    var h: Int
+    var size: Int
+}
+
 struct PaihuorTask: Codable, Equatable, Identifiable {
     var objectId: String
     var createdAt: Date
@@ -72,6 +80,7 @@ struct PaihuorTask: Codable, Equatable, Identifiable {
     var status: TaskStatus
     var reminder: TaskReminder
     var negotiation: [NegotiationMessage]
+    var images: [TaskImage]?
     var receivedAt: Int64
     var doneAt: Int64
     var archived: Bool
@@ -101,6 +110,7 @@ struct PaihuorTask: Codable, Equatable, Identifiable {
         status: TaskStatus = .pending,
         reminder: TaskReminder = .default,
         negotiation: [NegotiationMessage] = [],
+        images: [TaskImage] = [],
         receivedAt: Int64 = 0,
         doneAt: Int64 = 0,
         archived: Bool = false,
@@ -123,6 +133,7 @@ struct PaihuorTask: Codable, Equatable, Identifiable {
         self.status = status
         self.reminder = reminder
         self.negotiation = negotiation
+        self.images = images
         self.receivedAt = receivedAt
         self.doneAt = doneAt
         self.archived = archived

@@ -20,8 +20,10 @@ struct TaskListView: View {
                 let archiveTasks = tasks.filter { isAutoArchived($0) }
                 let activeTasks = tasks.filter { !isAutoArchived($0) }
                 let arrangedTasks = activeTasks.filter { $0.fromUserId == profile.userId.rawValue }
+                let incomingTasks = activeTasks.filter { $0.toUserId == profile.userId.rawValue }
                 let visibleTasks = visibleTasks(
                     arrangedTasks: arrangedTasks,
+                    incomingTasks: incomingTasks,
                     archiveTasks: archiveTasks
                 )
                 let sections = taskSections(for: visibleTasks)
@@ -78,6 +80,12 @@ struct TaskListView: View {
                     selectedBoard = .arranged
                 } label: {
                     Label("收集箱", systemImage: "checkmark.square")
+                }
+
+                Button {
+                    selectedBoard = .incoming
+                } label: {
+                    Label("待我处理", systemImage: "tray.and.arrow.down")
                 }
 
                 Button {
@@ -303,11 +311,14 @@ struct TaskListView: View {
 
     private func visibleTasks(
         arrangedTasks: [PaihuorTask],
+        incomingTasks: [PaihuorTask],
         archiveTasks: [PaihuorTask]
     ) -> [PaihuorTask] {
         switch selectedBoard {
         case .arranged:
             return arrangedTasks
+        case .incoming:
+            return incomingTasks
         case .archive:
             return archiveTasks
         }
@@ -443,6 +454,7 @@ private struct CircleIcon: View {
 
 private enum TaskBoard: String, CaseIterable, Identifiable {
     case arranged
+    case incoming
     case archive
 
     var id: String { rawValue }
@@ -451,6 +463,8 @@ private enum TaskBoard: String, CaseIterable, Identifiable {
         switch self {
         case .arranged:
             return "收集箱"
+        case .incoming:
+            return "待我处理"
         case .archive:
             return "归档"
         }
@@ -460,6 +474,8 @@ private enum TaskBoard: String, CaseIterable, Identifiable {
         switch self {
         case .arranged:
             return "checklist.unchecked"
+        case .incoming:
+            return "tray.and.arrow.down"
         case .archive:
             return "archivebox"
         }
@@ -469,6 +485,8 @@ private enum TaskBoard: String, CaseIterable, Identifiable {
         switch self {
         case .arranged:
             return "没有任务"
+        case .incoming:
+            return "没有待处理的任务"
         case .archive:
             return "归档里还没有记录"
         }
@@ -478,6 +496,8 @@ private enum TaskBoard: String, CaseIterable, Identifiable {
         switch self {
         case .arranged:
             return "点击 + 按钮即可添加"
+        case .incoming:
+            return "家人派来的任务会出现在这里"
         case .archive:
             return "完成后的任务会收进这里，记录不会删除"
         }

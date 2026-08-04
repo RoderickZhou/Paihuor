@@ -27,6 +27,8 @@
 - Widget 骨架：`paihuor://record` 打开 App 并进入新建任务页
 - 新建任务页：中文语音识别转写，长按录入、松开停止
 - MiniMax 解析：录音完成后自动从原话生成标题、细节、截止时间，用户审核后再发送
+- 图片附件：照片会先压缩为最长边 1600px、JPEG 0.8，再通过 `/uploads` 上传并随任务同步元数据
+- 接收任务：顶部菜单的“待我处理”显示别人派给当前用户的活，可继续执行收到、完成和商量
 
 ## 待接入
 
@@ -42,6 +44,7 @@
 - `upsertTask(_:for:)`：创建或更新任务
 - `deleteTask(_:for:)`：软删除自己发起的任务
 - `deleteTasks(for:)`：清空当前家庭的远端任务
+- `uploadImage` / `downloadImage`：带中继鉴权上传、下载任务图片
 
 当前默认实现会优先使用 `PaihuorRelayTaskSyncService`。如果 `PaihuorRelayBaseURL` / `PaihuorRelayLanURL` 与 `PaihuorRelayKey` 缺失，则自动回退 `MockTaskSyncService`，UI 不需要重写。
 
@@ -53,6 +56,7 @@ Paihuor Relay 当前接口为自建 Node 中继 REST：
 - `POST /tasks/{objectId}`：更新任务状态、商量记录、归档等字段；对象/数组字段需整段写回
 - `DELETE /tasks/{objectId}?by=<userId>`：软删除任务，服务端写入 `deleted=true`、`deletedBy` 墓碑并刷新 `updatedAt`
 - `POST /devices`：注册推送 token；iOS 暂无 APNs，可后续接入
+- `POST /uploads` / `GET /uploads/{id}`：上传和下载图片附件，二进制不进入任务 JSON
 
 注意：“清空本机任务”只清本地缓存，不会删除服务端任务。用户删除自己发起的任务时，iOS 调用 `DELETE /tasks/{objectId}?by=<userId>` 做软删除；已完成任务点“归档”时写入 `archived=true`，并兼容本地 `archivedAt` / `archivedBy` 字段，数据库记录继续保留。
 

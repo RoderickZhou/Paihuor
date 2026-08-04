@@ -1,4 +1,6 @@
 import SwiftUI
+import PhotosUI
+import UIKit
 
 struct TaskEditorView: View {
     @Environment(\.dismiss) private var dismiss
@@ -17,6 +19,11 @@ struct TaskEditorView: View {
     @State private var pendingAutoParseAfterRecording = false
     @State private var lastAutoParsedText = ""
     @State private var autoParseTask: Task<Void, Never>?
+    @State private var selectedPhotoItems: [PhotosPickerItem] = []
+    @State private var pendingImages: [PendingTaskImage] = []
+    @State private var isPreparingImages = false
+    @State private var isSending = false
+    @State private var attachmentErrorMessage: String?
 
     private var canSave: Bool {
         !normalizedTitle.isEmpty || !normalizedRawText.isEmpty
@@ -40,6 +47,7 @@ struct TaskEditorView: View {
                     quickInputArea
                     parsedDraftArea
                     scheduleArea
+                    attachmentArea
                     holdToRecordButton
                     parseMessage
                 }
@@ -67,6 +75,9 @@ struct TaskEditorView: View {
             if !isRecording && pendingAutoParseAfterRecording {
                 scheduleAutoParseAfterRecording()
             }
+        }
+        .onChange(of: selectedPhotoItems) { items in
+            prepareSelectedPhotos(items)
         }
         .onDisappear {
             cancelAutoParse()
@@ -226,23 +237,86 @@ struct TaskEditorView: View {
             Spacer()
 
             Button {
-                save()
+                Task {
+                    await save()
+                }
             } label: {
-                Image(systemName: "arrow.up")
+                Image(systemName: isSending ? "hourglass" : "arrow.up")
                     .font(.title2.weight(.bold))
                     .foregroundStyle(.white)
                     .frame(width: 56, height: 56)
-                    .background(canSave ? Color.paiPrimary : Color.paiTextSecondary.opacity(0.35))
+                    .background(canSave && !isSending ? Color.paiPrimary : Color.paiTextSecondary.opacity(0.35))
                     .clipShape(Circle())
             }
             .buttonStyle(.plain)
-            .disabled(!canSave)
+            .disabled(!canSave || isSending || isPreparingImages)
             .accessibilityLabel("发送")
         }
         .padding(.horizontal, 24)
         .padding(.top, 12)
         .padding(.bottom, 20)
         .background(.ultraThinMaterial)
+    }
+
+    private var attachmentArea: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Label("图片", systemImage: "photo.on.rectangle")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(Color.paiTextPrimary)
+
+                Spacer()
+
+                PhotosPicker(selection: $selectedPhotoItems, maxSelectionCount: 9, matching: .images) {
+                    Label(pendingImages.isEmpty ? "添加" : "继续添加", systemImage: "plus")
+                        .font(.subheadline.weight(.semibold))
+                }
+                .disabled(isPreparingImages || isSending)
+            }
+
+            if isPreparingImages {
+                Label("正在处理图片", systemImage: "hourglass")
+                    .font(.caption)
+                    .foregroundStyle(Color.paiTextSecondary)
+            }
+
+            if !pendingImages.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 10) {
+                        ForEach(pendingImages) { pending in
+                            ZStack(alignment: .topTrailing) {
+                                Image(uiImage: pending.preview)
+                                    .resizable()
+                                    .scaledToFill()
+                                    .frame(width: 76, height: 76)
+                                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+
+                                Button {
+                                    pendingImages.removeAll { $0.id == pending.id }
+                                    selectedPhotoItems = []
+                                } label: {
+                                    Image(systemName: "xmark.circle.fill")
+                                        .foregroundStyle(.white, Color.black.opacity(0.55))
+                                }
+                                .buttonStyle(.plain)
+                                .offset(x: 6, y: -6)
+                            }
+                        }
+                    }
+                    .padding(.top, 6)
+                    .padding(.trailing, 8)
+                }
+            }
+
+            if let attachmentErrorMessage {
+                Text(attachmentErrorMessage)
+                    .font(.caption)
+                    .foregroundStyle(Color.paiDanger)
+            }
+        }
+        .padding(14)
+        .background(Color.paiBackground)
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 
     private var holdToRecordButton: some View {
@@ -405,7 +479,7 @@ struct TaskEditorView: View {
         lastAutoParsedText = ""
     }
 
-    private func save() {
+    private func save() async {
         guard let profile = profileStore.profile else { return }
 
         let finalTitle = normalizedTitle.isEmpty
@@ -413,16 +487,95 @@ struct TaskEditorView: View {
             : normalizedTitle
         let finalRawText = normalizedRawText.isEmpty ? finalTitle : normalizedRawText
 
-        taskStore.createTask(
-            rawText: finalRawText,
-            title: finalTitle,
-            detail: detail.trimmingCharacters(in: .whitespacesAndNewlines),
-            deadline: hasDeadline ? deadline.epochMilliseconds : 0,
-            toUserId: toUserId,
-            profile: profile
-        )
+        isSending = true
+        attachmentErrorMessage = nil
+        do {
+            var images: [TaskImage] = []
+            for pending in pendingImages {
+                let uploaded = try await taskStore.uploadImage(
+                    pending.data,
+                    mime: "image/jpeg",
+                    width: pending.width,
+                    height: pending.height,
+                    profile: profile
+                )
+                images.append(uploaded)
+            }
 
-        dismiss()
+            taskStore.createTask(
+                rawText: finalRawText,
+                title: finalTitle,
+                detail: detail.trimmingCharacters(in: .whitespacesAndNewlines),
+                deadline: hasDeadline ? deadline.epochMilliseconds : 0,
+                images: images,
+                toUserId: toUserId,
+                profile: profile
+            )
+            dismiss()
+        } catch {
+            attachmentErrorMessage = "图片上传失败：\(error.localizedDescription)"
+        }
+        isSending = false
+    }
+
+    private func prepareSelectedPhotos(_ items: [PhotosPickerItem]) {
+        guard !items.isEmpty else { return }
+        isPreparingImages = true
+        attachmentErrorMessage = nil
+
+        Task {
+            var prepared: [PendingTaskImage] = []
+            do {
+                for item in items {
+                    guard let data = try await item.loadTransferable(type: Data.self),
+                          let image = UIImage(data: data),
+                          let pending = PendingTaskImage.prepare(image: image) else {
+                        continue
+                    }
+                    prepared.append(pending)
+                }
+                await MainActor.run {
+                    pendingImages = Array((pendingImages + prepared).prefix(9))
+                    selectedPhotoItems = []
+                    isPreparingImages = false
+                }
+            } catch {
+                await MainActor.run {
+                    selectedPhotoItems = []
+                    isPreparingImages = false
+                    attachmentErrorMessage = "读取图片失败：\(error.localizedDescription)"
+                }
+            }
+        }
+    }
+}
+
+private struct PendingTaskImage: Identifiable {
+    let id = UUID()
+    let data: Data
+    let preview: UIImage
+    let width: Int
+    let height: Int
+
+    static func prepare(image: UIImage, maxDimension: CGFloat = 1_600) -> PendingTaskImage? {
+        let originalSize = image.size
+        let scale = min(1, maxDimension / max(originalSize.width, originalSize.height))
+        let targetSize = CGSize(
+            width: max(1, floor(originalSize.width * scale)),
+            height: max(1, floor(originalSize.height * scale))
+        )
+        let format = UIGraphicsImageRendererFormat.default()
+        format.scale = 1
+        let resized = UIGraphicsImageRenderer(size: targetSize, format: format).image { _ in
+            image.draw(in: CGRect(origin: .zero, size: targetSize))
+        }
+        guard let data = resized.jpegData(compressionQuality: 0.8) else { return nil }
+        return PendingTaskImage(
+            data: data,
+            preview: resized,
+            width: Int(targetSize.width),
+            height: Int(targetSize.height)
+        )
     }
 }
 

@@ -174,6 +174,7 @@ Current behavior:
 - Foreground task page silently polls every 8 seconds.
 - iOS currently does not have APNs relay push; do not assume background delivery.
 - Task delete now calls `DELETE /tasks/{objectId}?by=<userId>`.
+- iOS supports authenticated image upload/download and exposes incoming tasks under `待我处理`.
 
 Local iOS secret config:
 
@@ -268,10 +269,11 @@ MINIMAX_API_KEY
 RELAY_BASE_URL
 RELAY_LAN_URL = http://10.1.30.175:8787
 RELAY_KEY
-FAMILY_ID
-MY_USER_ID = husband
-OTHER_USER_ID = wife
+FAMILY_ID (first-run pairing-code default only)
 ```
+
+Harmony role identity is runtime state stored by `ProfileService` under `family_profile`.
+Never hardcode `MY_USER_ID` / `OTHER_USER_ID` in `AppConfig`; one HAP must support both spouses.
 
 Windows command-line build:
 

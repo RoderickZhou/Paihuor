@@ -540,6 +540,7 @@ struct Index {
       TextInput({ placeholder: '例如 1217', text: this.setupFamilyId })
         .height(52).fontSize(16).margin({ top: 8, bottom: 24 })
         .backgroundColor(Color.White).borderRadius(8)
+        .fontColor(Color.Black).placeholderColor('#656B77').caretColor(Constants.COLOR_PRIMARY)
         .selectAll(true).maxLength(120)
         .onChange((value: string) => { this.setupFamilyId = value; })
 
@@ -556,6 +557,7 @@ struct Index {
       TextInput({ placeholder: this.setupUserId === FamilyRole.WIFE ? '老婆' : '老公', text: this.setupUserName })
         .height(52).fontSize(16).margin({ top: 8 })
         .backgroundColor(Color.White).borderRadius(8)
+        .fontColor(Color.Black).placeholderColor('#656B77').caretColor(Constants.COLOR_PRIMARY)
         .onChange((value: string) => { this.setupUserName = value; })
 
       Button('保存并继续')

@@ -103,6 +103,8 @@
 
 ## MiniMax 契约
 
+原生鸿蒙和 Android 兼容端的新建语音草稿额外要求 `deadlineText`：从原话逐字复制的完整时间短语。只有原话中存在明确钟点或时长、返回的是带时区的未来时间、且没有明显模糊限定时，才填入截止时间；否则保持未设置，用户可以手动选择。模糊的时间表达可保留在详情中。接收人始终由当前家庭配对确定，不由模型决定。此字段只用于草稿校验，不改变中继任务格式；下文旧版解析契约仍适用于未升级的 iOS。
+
 - Endpoint: `POST https://api.minimaxi.com/v1/chat/completions`
 - Header: `Authorization: Bearer <MINIMAX_API_KEY>`，`Content-Type: application/json`
 - Model: `MiniMax-M3`，用于 OpenAI-compatible Chat Completions；解析任务不要求深度推理，prompt 明确禁止输出思考过程

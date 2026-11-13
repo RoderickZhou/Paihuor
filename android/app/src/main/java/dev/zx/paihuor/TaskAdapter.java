@@ -27,6 +27,9 @@ public final class TaskAdapter extends BaseAdapter {
     private final Listener listener;
     private final String userId;
     private List<TaskItem> items = new ArrayList<>();
+    private boolean archive;
+    private long now;
+    private long tomorrow;
 
     public TaskAdapter(Context context, String userId, Listener listener) {
         this.context = context;
@@ -34,8 +37,11 @@ public final class TaskAdapter extends BaseAdapter {
         this.listener = listener;
     }
 
-    public void setItems(List<TaskItem> items) {
+    public void setItems(List<TaskItem> items, boolean archive, long now, long tomorrow) {
         this.items = items;
+        this.archive = archive;
+        this.now = now;
+        this.tomorrow = tomorrow;
         notifyDataSetChanged();
     }
 
@@ -97,7 +103,18 @@ public final class TaskAdapter extends BaseAdapter {
         });
 
         LinearLayout outer = new LinearLayout(context);
+        outer.setOrientation(LinearLayout.VERTICAL);
         outer.setPadding(dp(18), dp(5), dp(18), dp(7));
+        if (!archive) {
+            TaskRepository.Group group = TaskRepository.group(item, userId, now, tomorrow);
+            if (position == 0 || group != TaskRepository.group(getItem(position - 1), userId, now, tomorrow)) {
+                TextView heading = text(group.label, 13, group == TaskRepository.Group.OVERDUE ? 0xFFB43D45 : 0xFF596274);
+                heading.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+                heading.setAccessibilityHeading(true);
+                heading.setPadding(dp(2), dp(6), 0, dp(8));
+                outer.addView(heading);
+            }
+        }
         outer.addView(card, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT));
         return outer;

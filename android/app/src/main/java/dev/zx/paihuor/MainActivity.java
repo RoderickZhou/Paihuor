@@ -370,8 +370,9 @@ public final class MainActivity extends Activity implements TaskAdapter.Listener
 
     private void refreshList() {
         if (adapter == null || !Profile.isComplete(this)) return;
+        long now = System.currentTimeMillis(), tomorrow = TaskRepository.tomorrow(now);
         List<TaskItem> visible = TaskRepository.visible(TaskCache.load(this), Profile.familyId(this),
-                Profile.userId(this), archive, direction);
+                Profile.userId(this), archive, direction, now, tomorrow);
         for (int i = 0; i < directionButtons.size(); i++) {
             Button filter = directionButtons.get(i);
             boolean selected = i == direction.ordinal();
@@ -379,7 +380,7 @@ public final class MainActivity extends Activity implements TaskAdapter.Listener
             filter.setTextColor(selected ? PRIMARY : TEXT);
             filter.setBackground(round(selected ? 0xFFDDE6FF : Color.TRANSPARENT, 8));
         }
-        adapter.setItems(visible);
+        adapter.setItems(visible, archive, now, tomorrow);
         boolean empty = visible.isEmpty();
         emptyView.setVisibility(empty ? View.VISIBLE : View.GONE);
         listView.setVisibility(empty ? View.GONE : View.VISIBLE);
@@ -420,6 +421,10 @@ public final class MainActivity extends Activity implements TaskAdapter.Listener
         form.setOrientation(LinearLayout.VERTICAL);
         form.setPadding(dp(24), dp(18), dp(24), dp(24));
         form.addView(label("派一件活", 25, TEXT, true));
+        String recipient = "wife".equals(Profile.counterpart(this)) ? "老婆" : "老公";
+        TextView recipientLabel = label("接收人：" + recipient, 15, TEXT, true);
+        recipientLabel.setPadding(0, dp(10), 0, 0);
+        form.addView(recipientLabel, matchWrap());
         Button record = new Button(this);
         record.setTextColor(Color.WHITE);
         record.setTextSize(16);
@@ -442,7 +447,7 @@ public final class MainActivity extends Activity implements TaskAdapter.Listener
         LinearLayout.LayoutParams detailParams = match(dp(70)); detailParams.topMargin = dp(10);
         form.addView(detail, detailParams);
 
-        TextView deadline = label("不设截止时间", 15, SECONDARY, false);
+        TextView deadline = label("截止时间：未设置", 15, TEXT, false);
         deadline.setPadding(dp(12), dp(15), dp(12), dp(15));
         deadline.setBackground(round(0xFFF1F4FB, 8));
         LinearLayout.LayoutParams deadlineParams = matchWrap(); deadlineParams.topMargin = dp(10);
@@ -451,7 +456,7 @@ public final class MainActivity extends Activity implements TaskAdapter.Listener
             if (draftDeadline == 0) pickDeadline(deadline);
             else new AlertDialog.Builder(this).setItems(new String[]{"修改截止时间", "清除截止时间"}, (picker, choice) -> {
                 if (choice == 0) pickDeadline(deadline);
-                else { draftDeadline = 0; deadline.setText("不设截止时间"); }
+                else { draftDeadline = 0; updateDraftDeadline(deadline); }
             }).show();
         });
 
@@ -471,7 +476,7 @@ public final class MainActivity extends Activity implements TaskAdapter.Listener
         form.addView(imageScroll, match(dp(92)));
 
         Button send = new Button(this);
-        send.setText("发送给" + ("wife".equals(Profile.counterpart(this)) ? "老婆" : "老公"));
+        send.setText("发送给" + recipient);
         send.setTextColor(Color.WHITE);
         send.setTextSize(17);
         send.setBackground(round(PRIMARY, 27));
@@ -630,8 +635,7 @@ public final class MainActivity extends Activity implements TaskAdapter.Listener
                     title.setText(draft == null ? value : draft.title);
                     detail.setText(draft == null ? "" : draft.detail);
                     draftDeadline = draft == null ? 0 : draft.deadline;
-                    deadline.setText(draftDeadline == 0 ? "不设截止时间"
-                            : new SimpleDateFormat("MM月dd日 HH:mm", Locale.CHINA).format(new Date(draftDeadline)));
+                    updateDraftDeadline(deadline);
                     message(draft == null ? "未能自动整理，已填入原话，请手动确认" : value);
                     updateControls();
                 });
@@ -708,11 +712,16 @@ public final class MainActivity extends Activity implements TaskAdapter.Listener
                 result.clear();
                 result.set(year, month, day, hour, minute, 0);
                 draftDeadline = result.getTimeInMillis();
-                view.setText(new SimpleDateFormat("MM月dd日 HH:mm", Locale.CHINA).format(result.getTime()));
+                updateDraftDeadline(view);
             }, calendar.get(Calendar.HOUR_OF_DAY), calendar.get(Calendar.MINUTE), true);
             time.show();
         }, calendar.get(Calendar.YEAR), calendar.get(Calendar.MONTH), calendar.get(Calendar.DAY_OF_MONTH));
         date.show();
+    }
+
+    private void updateDraftDeadline(TextView view) {
+        view.setText("截止时间：" + (draftDeadline == 0 ? "未设置"
+                : new SimpleDateFormat("MM月dd日 HH:mm", Locale.CHINA).format(new Date(draftDeadline))));
     }
 
     private void pickImages() {

@@ -16,6 +16,7 @@ import { updateAllCards } from '../services/WidgetCardData';
 import { AppConfig } from '../config/AppConfig';
 import { FamilyProfile, FamilyRole } from '../models/FamilyProfile';
 import { ProfileService } from '../services/ProfileService';
+import { InboxGroup, InboxOrder } from '../models/InboxOrder';
 
 @Entry
 @Component
@@ -76,6 +77,8 @@ struct Index {
   @State pairingHealth: string = '';
   @State savingDraft: boolean = false;
   private lastSync: number = 0;
+  private boardNow: number = 0;
+  private boardTomorrow: number = 0;
   private syncRunning: boolean = false;
   private syncGeneration: number = 0;
   private pollTimer: number = -1;
@@ -156,8 +159,11 @@ struct Index {
     this.doneUnarchivedCount = doneU;
     this.archivedTasks = arch;
     const board = this.selectedBoard === 'archive' ? arch : active;
-    this.tasks = board.filter((t: TaskItem) => this.directionFilter === 'all'
+    const visible = board.filter((t: TaskItem) => this.directionFilter === 'all'
       || (this.directionFilter === 'incoming' ? t.toUserId === this.myUserId : t.fromUserId === this.myUserId));
+    this.boardNow = Date.now();
+    this.boardTomorrow = InboxOrder.tomorrow(this.boardNow);
+    this.tasks = this.selectedBoard === 'archive' ? visible : InboxOrder.sort(visible, this.myUserId, this.boardNow, this.boardTomorrow);
     NotificationService.getInstance().setBadge(unread); // 桌面图标角标未读数
     // 推送桌面服务卡片更新（App 活着时近实时；无卡片则内部直接返回）
     try {
@@ -213,6 +219,11 @@ struct Index {
     const remote = await relay.list(family, this.lastSync);
     if (remote === null || generation !== this.syncGeneration) return;
     if (remote.length === 0) {
+      const now = Date.now();
+      const tomorrow = InboxOrder.tomorrow(now);
+      if (this.selectedBoard === 'inbox' && this.tasks.some((t: TaskItem) => t.deadline > 0
+        && InboxOrder.group(t, this.myUserId, this.boardNow, this.boardTomorrow)
+          !== InboxOrder.group(t, this.myUserId, now, tomorrow))) this.refresh();
       this.firstPollDone = true;
       await this.reportSync(family, role);
       return;
@@ -437,12 +448,19 @@ struct Index {
           this.EmptyState()
         } else {
           List({ space: 12 }) {
-            ForEach(this.tasks, (item: TaskItem) => {
+            ForEach(this.tasks, (item: TaskItem, index: number) => {
               ListItem() {
-                this.TaskCard(item)
+                Column() {
+                  if (this.selectedBoard === 'inbox' && this.startsInboxGroup(item, index)) {
+                    Text(this.inboxGroupLabel(item)).fontSize(13).fontWeight(FontWeight.Medium)
+                      .fontColor(this.inboxGroup(item) === InboxGroup.OVERDUE ? '#B43D45' : '#596274')
+                      .width('100%').padding({ left: 2, bottom: 8, top: 4 })
+                  }
+                  this.TaskCard(item)
+                }
               }
               .swipeAction({ end: this.SwipeEnd(item) })
-            }, (item: TaskItem) => item.id + '-' + item.status + '-' + item.deadline + '-' + item.updatedAt + '-' + item.receivedAt + '-' + item.doneAt + '-' + item.negotiation.length + '-' + item.archived + '-' + item.title)
+            }, (item: TaskItem, index: number) => item.id + '-' + item.status + '-' + item.deadline + '-' + item.updatedAt + '-' + item.receivedAt + '-' + item.doneAt + '-' + item.negotiation.length + '-' + item.archived + '-' + item.title + '-' + this.inboxGroup(item) + '-' + this.startsInboxGroup(item, index))
           }
           .width('100%')
           .layoutWeight(1)
@@ -586,6 +604,23 @@ struct Index {
       .fontColor(this.directionFilter === key ? Constants.COLOR_PRIMARY : Constants.COLOR_TEXT_PRIMARY)
       .accessibilitySelected(this.directionFilter === key)
       .onClick(() => { this.directionFilter = key; this.refresh(); })
+  }
+
+  private inboxGroup(item: TaskItem): InboxGroup {
+    return InboxOrder.group(item, this.myUserId, this.boardNow, this.boardTomorrow);
+  }
+
+  private startsInboxGroup(item: TaskItem, index: number): boolean {
+    return this.selectedBoard === 'inbox' && (index === 0 || this.inboxGroup(item) !== this.inboxGroup(this.tasks[index - 1]));
+  }
+
+  private inboxGroupLabel(item: TaskItem): string {
+    switch (this.inboxGroup(item)) {
+      case InboxGroup.OVERDUE: return '已超时';
+      case InboxGroup.TODAY: return '今天到期';
+      case InboxGroup.WAITING: return '待我接下';
+      default: return '其他任务';
+    }
   }
 
   @Builder
@@ -862,7 +897,9 @@ struct Index {
       Column() {
         Text('派一件活')
           .fontSize(18).fontWeight(FontWeight.Bold)
-          .fontColor(Constants.COLOR_TEXT_PRIMARY).margin({ bottom: 16 })
+          .fontColor(Constants.COLOR_TEXT_PRIMARY).margin({ bottom: 8 })
+        Text('接收人：' + this.displayName(this.otherUserId))
+          .fontSize(15).fontColor(Constants.COLOR_TEXT_PRIMARY).width('100%').margin({ bottom: 12 })
 
         // 第二步：按住说话
         Button(this.recording ? '松开生成草稿' : (this.transcribing || this.extracting ? '正在生成草稿…' : '按住说话'))
@@ -907,6 +944,7 @@ struct Index {
         TextInput({ text: this.draftTitle, placeholder: '说完自动填，也可手动改' })
           .height(48)
           .backgroundColor(Constants.COLOR_BG)
+          .fontColor(Constants.COLOR_TEXT_PRIMARY).placeholderColor('#656B77')
           .borderRadius(10)
           .enabled(!this.recording && !this.transcribing && !this.extracting)
           .onChange((v: string) => { this.draftTitle = v; })
@@ -914,6 +952,7 @@ struct Index {
         TextArea({ text: this.draftDetail, placeholder: '补充细节（可选）' })
           .height(68).width('100%').fontSize(14).margin({ top: 8 })
           .backgroundColor(Constants.COLOR_BG).borderRadius(10)
+          .fontColor(Constants.COLOR_TEXT_PRIMARY).placeholderColor('#656B77')
           .enabled(!this.recording && !this.transcribing && !this.extracting)
           .onChange((v: string) => { this.draftDetail = v; })
 
@@ -932,12 +971,14 @@ struct Index {
         .enabled(!this.recording && !this.transcribing && !this.extracting)
 
         Row() {
-          Text(this.draftDeadline > 0 ? ('截止：' + Constants.formatDeadline(this.draftDeadline)) : '未设时间')
+          Text(this.draftDeadline > 0 ? Constants.formatDeadline(this.draftDeadline) : '未设置')
             .fontSize(13)
-            .fontColor(this.draftDeadline > 0 ? Constants.COLOR_PRIMARY : Constants.COLOR_TEXT_SECONDARY)
-          Blank()
+            .fontColor(Constants.COLOR_TEXT_PRIMARY).layoutWeight(1)
+          Button(this.draftDeadline > 0 ? '修改' : '选择时间').fontSize(13).height(36)
+            .fontColor(Constants.COLOR_PRIMARY).backgroundColor(Color.Transparent)
+            .onClick(() => { this.pickDraftDeadline(); })
           if (this.draftDeadline > 0) {
-            Button('清除').fontSize(13).height(32)
+            Button('清除').fontSize(13).height(36)
               .fontColor(Constants.COLOR_PRIMARY).backgroundColor(Color.Transparent)
               .onClick(() => { this.draftDeadline = 0; })
           }
@@ -971,7 +1012,7 @@ struct Index {
             .backgroundColor(Constants.COLOR_BG).layoutWeight(1).height(46)
             .borderRadius(10).margin({ right: 10 })
             .onClick(() => { this.closeCreate(); })
-          Button('发送')
+          Button('发送给' + this.displayName(this.otherUserId))
             .type(ButtonType.Normal).fontColor(Color.White)
             .backgroundColor(Constants.COLOR_PRIMARY).layoutWeight(1).height(46)
             .borderRadius(10)
@@ -1670,6 +1711,16 @@ struct Index {
     this.draftThumbs = [];
     this.uploadingImg = false;
     this.showCreate = true;
+  }
+
+  private pickDraftDeadline(): void {
+    const selected = new Date(this.draftDeadline || Date.now());
+    this.getUIContext().showDatePickerDialog({
+      selected: selected,
+      showTime: true,
+      useMilitaryTime: true,
+      onDateAccept: (value: Date) => { if (this.showCreate) this.draftDeadline = value.getTime(); }
+    });
   }
 
   // 选图 → 逐张转码降采样 → 上传中继 → 记录元数据+预览缩略图

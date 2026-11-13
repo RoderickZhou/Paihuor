@@ -62,6 +62,7 @@ struct Index {
   @State openedHouseholdCard: string = '';
   private householdFamily: string = '';
   private householdFetching: boolean = false;
+  private householdMutation: number = 0;
   @State directionFilter: string = 'all';
   @State archivedTasks: TaskItem[] = [];
   @State archivedCount: number = 0;
@@ -214,9 +215,10 @@ struct Index {
       this.householdFailed = false;
     }
     this.householdFetching = true;
+    const mutation = this.householdMutation;
     try {
       const cards = await RelayService.getInstance().household(family);
-      if (family !== this.familyId) return;
+      if (family !== this.familyId || mutation !== this.householdMutation) return;
       this.householdFailed = cards === null;
       this.householdLoading = false;
       if (cards && (cards.length !== this.householdCards.length || cards.some((card: HouseholdCard, i: number) =>
@@ -226,8 +228,17 @@ struct Index {
       }
     } finally {
       this.householdFetching = false;
-      if (family !== this.familyId) this.refreshHousehold();
+      if (family !== this.familyId || mutation !== this.householdMutation) this.refreshHousehold();
     }
+  }
+
+  private updateHouseholdCard(card: HouseholdCard): void {
+    if (card.familyId !== this.familyId) return;
+    const current = this.householdCards.find((value: HouseholdCard) => value.id === card.id);
+    if (!current || current.revision > card.revision) return;
+    this.householdMutation++;
+    this.householdCards = this.householdCards.map((value: HouseholdCard) => value.id === card.id ? card : value);
+    this.refresh();
   }
 
   stopPolling(): void {
@@ -564,7 +575,8 @@ struct Index {
       if (this.showHousehold) {
         HouseholdBoard({ cards: this.householdCards, family: this.familyId, user: this.myUserId,
           openedCard: this.openedHouseholdCard, failed: this.householdFailed, loading: this.householdLoading,
-          onClose: () => { this.showHousehold = false; }, onRefresh: () => { this.refreshHousehold(); } })
+          onClose: () => { this.showHousehold = false; }, onRefresh: () => { this.refreshHousehold(); },
+          onCardUpdate: (card: HouseholdCard) => { this.updateHouseholdCard(card); } })
       }
 
     }
@@ -2307,7 +2319,12 @@ struct Index {
   }
 
   private directionLabel(item: TaskItem): string {
-    if (item.householdId) return '家里待办 · 我已认领';
+    if (item.householdId) {
+      const card = this.householdCards.find((value: HouseholdCard) => value.id === item.householdId);
+      const steps = card?.checklist ?? [];
+      return '家里待办 · 我已认领' + (steps.length > 0
+        ? ' · 子清单 ' + steps.filter(step => step.checked).length + '/' + steps.length : '');
+    }
     let st = item.repeat?.skippedAt ? '已跳过' : this.statusLabel(item.status);
     const img = (item.images.length > 0 ? (' · 📷' + item.images.length) : '')
       + (item.repeat ? (' · ' + this.repeatLabel(item.repeat.kind, item.repeat.days)

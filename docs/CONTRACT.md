@@ -139,6 +139,8 @@ User message:
 - `POST /household/cards`：`{ familyId, userId, list, items: [{ id, title, detail, imageIds }] }`。每批 1–50 张，客户端 UUID 用于安全重试，照片使用同家庭下的 `/uploads` ID。
 - `POST /household/cards/:id`：`{ familyId, userId, action, revision }`。`claim` 把待认领卡变为进行中，只有认领人可以 `release` 或 `complete`。版本冲突返回 409，客户端重新拉取；完成保留认领人和完成时间。
 - `edit` 附带 `title`、`detail`、`list`，创建者和认领人可编辑或移动，保留照片和状态。`delete` 仅创建者可操作；中继保留空墓碑，防止旧的创建请求重试时复活卡片。`reopen` 仅已完成卡片的认领人可操作，恢复为原认领人的进行中并清空完成时间。
+- 创建和编辑可带 `deadline`（epoch ms，`0` 表示无截止时间）及 `checklist`（至多 30 项，`{id, title}`，ID 为 UUID）。响应的每个子项带 `checked`。编辑时省略字段会保留旧值，传空数组清除子清单；保留相同子项 ID 的编辑不会清除勾选。
+- `check` 动作附带 `itemId` 和布尔值 `checked`，需要当前卡片 `revision`。家人可逐项勾选或取消；卡片完成后勾选只读，撤销完成保留进度。全部勾完不自动完成整张卡，设置截止时间或勾选都不发推送。
 - 原生鸿蒙与 Android 兼容端只在本地把本人认领的进行中卡片投影到收集箱，不写入 `/tasks`、不纳入派活回执，旧 iOS 不受影响。
 
 ### 周期任务

@@ -1,5 +1,11 @@
 import { TaskImage, TaskItem, TaskStatus } from './TaskModels';
 
+export class HouseholdStep {
+  id: string = '';
+  title: string = '';
+  checked: boolean = false;
+}
+
 export class HouseholdCard {
   id: string = '';
   familyId: string = '';
@@ -13,6 +19,8 @@ export class HouseholdCard {
   doneAt: number = 0;
   revision: number = 0;
   images: TaskImage[] = [];
+  deadline: number = 0;
+  checklist: HouseholdStep[] = [];
 }
 
 export class HouseholdDraft {
@@ -20,6 +28,8 @@ export class HouseholdDraft {
   title: string = '';
   detail: string = '';
   imageIds: string[] = [];
+  deadline: number = 0;
+  checklist: HouseholdStep[] = [];
 }
 
 export function householdTask(card: HouseholdCard): TaskItem {
@@ -32,6 +42,8 @@ export function householdTask(card: HouseholdCard): TaskItem {
   task.detail = card.detail;
   task.images = card.images;
   task.createdAt = card.createdAt;
+  task.deadline = card.deadline || 0;
+  task.updatedAt = card.revision;
   task.status = TaskStatus.RECEIVED;
   task.householdId = card.id;
   return task;

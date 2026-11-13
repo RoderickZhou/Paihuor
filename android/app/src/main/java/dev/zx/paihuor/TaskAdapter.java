@@ -123,7 +123,8 @@ public final class TaskAdapter extends BaseAdapter {
     }
 
     private String directionText(TaskItem item) {
-        if (item.household != null) return "家里待办 · " + item.household.list + " · 我已认领";
+        if (item.household != null) return "家里待办 · " + item.household.list + " · 我已认领"
+                + (item.household.checklist.isEmpty() ? "" : " · " + item.household.progress());
         String direction = item.fromUserId.equals(userId) ? "我派给对方" : "对方派给我";
         if (item.skippedAt > 0) return direction + " · 已跳过";
         if (item.fromUserId.equals(userId) && !"done".equals(item.status) && !"negotiating".equals(item.status)) {

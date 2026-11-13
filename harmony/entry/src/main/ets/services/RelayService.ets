@@ -2,7 +2,7 @@ import { http } from '@kit.NetworkKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { AppConfig } from '../config/AppConfig';
 import { TaskItem, TaskImage } from '../models/TaskModels';
-import { HouseholdCard, HouseholdDraft } from '../models/HouseholdCard';
+import { HouseholdCard, HouseholdDraft, HouseholdStep } from '../models/HouseholdCard';
 
 const TAG = 'RelayService';
 
@@ -52,6 +52,10 @@ interface HouseholdAction {
   title?: string;
   detail?: string;
   list?: string;
+  deadline?: number;
+  checklist?: HouseholdStep[];
+  itemId?: string;
+  checked?: boolean;
 }
 
 // 跨设备中继客户端：优先局域网直连(快)，连不上回退 cloudflared 公网
@@ -253,10 +257,28 @@ export class RelayService {
     return this.writeHousehold('/household/cards/' + encodeURIComponent(card.id), JSON.stringify(data));
   }
 
-  async editHousehold(card: HouseholdCard, user: string, title: string, detail: string, list: string): Promise<boolean> {
+  async editHousehold(card: HouseholdCard, user: string, title: string, detail: string, list: string,
+    deadline: number, checklist: HouseholdStep[]): Promise<boolean> {
     const data: HouseholdAction = { familyId: card.familyId, userId: user, action: 'edit', revision: card.revision,
-      title: title, detail: detail, list: list };
+      title: title, detail: detail, list: list, deadline: deadline, checklist: checklist };
     return this.writeHousehold('/household/cards/' + encodeURIComponent(card.id), JSON.stringify(data));
+  }
+
+  async checkHousehold(card: HouseholdCard, user: string, step: HouseholdStep, checked: boolean): Promise<HouseholdCard | null> {
+    const data: HouseholdAction = { familyId: card.familyId, userId: user, action: 'check', revision: card.revision,
+      itemId: step.id, checked: checked };
+    const base = await this.base();
+    const client = http.createHttp();
+    try {
+      const response = await client.request(base + '/household/cards/' + encodeURIComponent(card.id), {
+        method: http.RequestMethod.POST, header: this.header(), extraData: JSON.stringify(data),
+        connectTimeout: 6000, readTimeout: 8000
+      });
+      return response.responseCode === 200 ? JSON.parse(response.result as string) as HouseholdCard : null;
+    } catch (err) {
+      this.resetBase();
+      return null;
+    } finally { client.destroy(); }
   }
 
   private async writeHousehold(path: string, body: string): Promise<boolean> {

@@ -108,7 +108,7 @@ public final class MainActivity extends Activity implements TaskAdapter.Listener
         getWindow().setStatusBarColor(Color.BLACK);
         getWindow().setNavigationBarColor(Color.BLACK);
         relay = new RelayClient(this);
-        household = new HouseholdBoard(this, new RelayClient(this), this::refreshList, () -> {
+        household = new HouseholdBoard(this, new RelayClient(this), this::refreshList, this::chooseDeadline, () -> {
             Intent picker = new Intent(Intent.ACTION_OPEN_DOCUMENT).setType("image/*").addCategory(Intent.CATEGORY_OPENABLE);
             startActivityForResult(picker, PICK_HOUSEHOLD_IMAGE);
         });

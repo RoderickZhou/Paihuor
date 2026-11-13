@@ -1,7 +1,7 @@
 import { util } from '@kit.ArkTS';
 import { image } from '@kit.ImageKit';
 import { Constants } from '../constants/Constants';
-import { HouseholdCard, HouseholdDraft } from '../models/HouseholdCard';
+import { HouseholdCard, HouseholdDraft, HouseholdStep } from '../models/HouseholdCard';
 import { ImageService } from '../services/ImageService';
 import { RelayService } from '../services/RelayService';
 
@@ -15,6 +15,7 @@ export struct HouseholdBoard {
   @Prop openedCard: string = '';
   onClose: () => void = () => {};
   onRefresh: () => void = () => {};
+  onCardUpdate: (card: HouseholdCard) => void = () => {};
   @State tab: string = 'available';
   @State list: string = '';
   @State editing: boolean = false;
@@ -22,6 +23,8 @@ export struct HouseholdBoard {
   @State draftTitles: string = '';
   @State draftDetail: string = '';
   @State draftPhotos: string[] = [];
+  @State draftDeadline: number = 0;
+  @State draftSteps: HouseholdStep[] = [];
   @State writing: boolean = false;
   @State uploading: boolean = false;
   @State detailId: string = '';
@@ -29,6 +32,9 @@ export struct HouseholdBoard {
   @State editTitle: string = '';
   @State editNote: string = '';
   @State editList: string = '';
+  @State editDeadline: number = 0;
+  @State editSteps: HouseholdStep[] = [];
+  @State checkReset: number = 0;
   @State photos: image.PixelMap[] = [];
   private signature: string = '';
   private batch: HouseholdDraft[] = [];
@@ -156,6 +162,7 @@ export struct HouseholdBoard {
                 .fontColor(Constants.COLOR_PRIMARY_DARK).backgroundColor(Color.Transparent).onClick(() => { this.draftPhotos = []; })
             }
           }.width('100%')
+          this.Extras(false)
           Row({ space: 8 }) {
             Button('取消').height(44).layoutWeight(1).enabled(!this.writing && !this.uploading)
               .fontColor(Constants.COLOR_PRIMARY_DARK).backgroundColor(Constants.COLOR_BG).onClick(() => { this.editing = false; })
@@ -176,6 +183,18 @@ export struct HouseholdBoard {
           Text(card.title).fontSize(20).fontWeight(FontWeight.Bold).fontColor(Constants.COLOR_TEXT_PRIMARY).width('100%')
           Text(card.list + (this.meta(card) ? ' · ' + this.meta(card) : '')).fontSize(14).fontColor('#596274').width('100%')
           if (card.detail.length > 0) Text(card.detail).fontSize(16).fontColor(Constants.COLOR_TEXT_PRIMARY).width('100%')
+          if ((card.checklist ?? []).length > 0) {
+            Text(this.progress(card)).fontSize(15).fontWeight(FontWeight.Medium)
+              .fontColor(Constants.COLOR_TEXT_PRIMARY).width('100%')
+            ForEach(card.checklist, (step: HouseholdStep) => {
+              Row({ space: 8 }) {
+                Checkbox({ name: step.id, group: card.id }).select(step.checked)
+                  .enabled(!this.writing && card.status !== 'done').accessibilityText(step.title)
+                  .onChange((checked: boolean) => { this.toggleStep(card, step, checked); })
+                Text(step.title).fontSize(15).fontColor(Constants.COLOR_TEXT_PRIMARY).layoutWeight(1)
+              }.width('100%').constraintSize({ minHeight: 44 })
+            }, (step: HouseholdStep) => step.id + ':' + this.checkReset)
+          }
           ForEach(this.photos, (photo: image.PixelMap) => {
             Image(photo).height(180).width('100%').objectFit(ImageFit.Contain).accessibilityText('卡片照片')
           })
@@ -215,6 +234,7 @@ export struct HouseholdBoard {
             .backgroundColor(Constants.COLOR_BG).maxLength(40).onChange((value: string) => { this.editList = value; })
           Button('选择已有清单').height(42).fontSize(14).width('100%').bindMenu(this.editListOptions())
             .fontColor(Constants.COLOR_PRIMARY_DARK).backgroundColor(Constants.COLOR_BG)
+          this.Extras(true)
           Row({ space: 8 }) {
             Button('取消').height(44).layoutWeight(1).enabled(!this.writing).backgroundColor(Constants.COLOR_BG)
               .fontColor(Constants.COLOR_PRIMARY_DARK).onClick(() => { this.editTarget = null; })
@@ -224,6 +244,92 @@ export struct HouseholdBoard {
         }.width('100%').padding(18).backgroundColor(Color.White)
       }.width('100%').constraintSize({ maxHeight: '92%' }).scrollBar(BarState.Off)
     }.width('100%').height('100%').backgroundColor('#66000000')
+  }
+
+  @Builder
+  Extras(existing: boolean) {
+    Column({ space: 8 }) {
+      Text('截止时间（选填）').fontSize(14).fontColor(Constants.COLOR_TEXT_PRIMARY).width('100%')
+      Row({ space: 8 }) {
+        Button(this.deadline(existing) ? Constants.formatDeadline(this.deadline(existing)) : '选择日期和时间')
+          .layoutWeight(1).height(44).fontSize(14).fontColor(Constants.COLOR_PRIMARY_DARK)
+          .backgroundColor(Constants.COLOR_BG).enabled(!this.writing).onClick(() => { this.pickDeadline(existing); })
+        if (this.deadline(existing) > 0) {
+          Button('清除').height(44).fontSize(14).fontColor(Constants.COLOR_PRIMARY_DARK)
+            .backgroundColor(Color.Transparent).enabled(!this.writing).onClick(() => { this.setDeadline(existing, 0); })
+        }
+      }.width('100%')
+      Row({ space: 8 }) {
+        Text('子清单（选填）').fontSize(14).fontColor(Constants.COLOR_TEXT_PRIMARY).layoutWeight(1)
+        Button('添加子项').height(40).fontSize(14).fontColor(Constants.COLOR_PRIMARY_DARK)
+          .backgroundColor(Constants.COLOR_BG).enabled(!this.writing && this.steps(existing).length < 30)
+          .onClick(() => { this.addStep(existing); })
+      }.width('100%')
+      ForEach(this.steps(existing), (step: HouseholdStep) => {
+        Row({ space: 8 }) {
+          TextInput({ text: step.title, placeholder: '子项名称' }).height(44).layoutWeight(1)
+            .fontColor(Color.Black).backgroundColor(Constants.COLOR_BG).maxLength(120)
+            .onChange((value: string) => { this.renameStep(existing, step.id, value); })
+          Button('×').width(44).height(44).fontSize(20).fontColor(Constants.COLOR_PRIMARY_DARK)
+            .backgroundColor(Color.Transparent).accessibilityText('移除子项').enabled(!this.writing)
+            .onClick(() => { this.setSteps(existing, this.steps(existing).filter((item: HouseholdStep) => item.id !== step.id)); })
+        }.width('100%')
+      }, (step: HouseholdStep) => step.id)
+    }.width('100%')
+  }
+
+  private deadline(existing: boolean): number { return existing ? this.editDeadline : this.draftDeadline; }
+
+  private setDeadline(existing: boolean, value: number): void {
+    if (existing) this.editDeadline = value;
+    else this.draftDeadline = value;
+  }
+
+  private pickDeadline(existing: boolean): void {
+    this.getUIContext().showDatePickerDialog({ selected: new Date(this.deadline(existing) || Date.now()),
+      showTime: true, useMilitaryTime: true,
+      onDateAccept: (value: Date) => {
+        if (existing ? this.editTarget !== null : this.editing) this.setDeadline(existing, value.getTime());
+      } });
+  }
+
+  private steps(existing: boolean): HouseholdStep[] { return existing ? this.editSteps : this.draftSteps; }
+
+  private setSteps(existing: boolean, steps: HouseholdStep[]): void {
+    if (existing) this.editSteps = steps;
+    else this.draftSteps = steps;
+  }
+
+  private addStep(existing: boolean): void {
+    if (this.steps(existing).length >= 30) return;
+    const step = new HouseholdStep();
+    step.id = util.generateRandomUUID();
+    this.setSteps(existing, this.steps(existing).concat([step]));
+  }
+
+  private renameStep(existing: boolean, id: string, title: string): void {
+    this.setSteps(existing, this.steps(existing).map((step: HouseholdStep) =>
+      step.id === id ? this.copyStep(step, title) : step));
+  }
+
+  private copyStep(step: HouseholdStep, title: string): HouseholdStep {
+    const copy = new HouseholdStep();
+    copy.id = step.id; copy.title = title; copy.checked = step.checked;
+    return copy;
+  }
+
+  private async toggleStep(card: HouseholdCard, step: HouseholdStep, checked: boolean): Promise<void> {
+    if (this.writing || card.status === 'done' || step.checked === checked) return;
+    this.writing = true;
+    try {
+      const saved = await RelayService.getInstance().checkHousehold(card, this.user, step, checked);
+      if (saved) this.onCardUpdate(saved);
+      else {
+        this.checkReset++;
+        this.toast('勾选未保存，正在刷新');
+      }
+      this.onRefresh();
+    } finally { this.writing = false; }
   }
 
   private editListOptions(): MenuElement[] {
@@ -238,6 +344,8 @@ export struct HouseholdBoard {
     this.editTitle = card.title;
     this.editNote = card.detail;
     this.editList = card.list;
+    this.editDeadline = card.deadline || 0;
+    this.editSteps = (card.checklist ?? []).map((step: HouseholdStep) => this.copyStep(step, step.title));
     this.editTarget = card;
   }
 
@@ -246,9 +354,11 @@ export struct HouseholdBoard {
     const title = this.editTitle.trim(), note = this.editNote.trim(), list = this.editList.trim() || '日常';
     if (!card || this.writing) return;
     if (!title || title.length > 120 || note.length > 2000 || list.length > 40) { this.toast('请检查标题、备注和清单名'); return; }
+    const steps = this.editSteps.map((step: HouseholdStep) => this.copyStep(step, step.title.trim()));
+    if (steps.some((step: HouseholdStep) => !step.title)) { this.toast('请填写或移除空白子项'); return; }
     this.writing = true;
     try {
-      if (await RelayService.getInstance().editHousehold(card, this.user, title, note, list)) {
+      if (await RelayService.getInstance().editHousehold(card, this.user, title, note, list, this.editDeadline, steps)) {
         this.editTarget = null;
         this.detailId = '';
         this.photos = [];
@@ -287,10 +397,18 @@ export struct HouseholdBoard {
   }
 
   private meta(card: HouseholdCard): string {
-    let label = card.assignee ? (card.assignee === 'wife' ? '老婆' : '老公') : '';
-    if (card.doneAt > 0) label += ' · ' + Constants.formatDeadline(card.doneAt);
-    if (card.images.length > 0) label += (label ? ' · ' : '') + card.images.length + ' 张照片';
-    return label;
+    const parts: string[] = [];
+    if (card.assignee) parts.push(card.assignee === 'wife' ? '老婆' : '老公');
+    if (card.doneAt > 0) parts.push('完成 ' + Constants.formatDeadline(card.doneAt));
+    if (card.deadline > 0) parts.push('截止 ' + Constants.formatDeadline(card.deadline));
+    if ((card.checklist ?? []).length > 0) parts.push(this.progress(card));
+    if (card.images.length > 0) parts.push(card.images.length + ' 张照片');
+    return parts.join(' · ');
+  }
+
+  private progress(card: HouseholdCard): string {
+    const steps = card.checklist ?? [];
+    return '子清单 ' + steps.filter((step: HouseholdStep) => step.checked).length + '/' + steps.length;
   }
 
   private async openDetail(card: HouseholdCard): Promise<void> {
@@ -322,6 +440,8 @@ export struct HouseholdBoard {
     this.draftTitles = '';
     this.draftDetail = '';
     this.draftPhotos = [];
+    this.draftDeadline = 0;
+    this.draftSteps = [];
     this.signature = '';
     this.editing = true;
   }
@@ -350,13 +470,18 @@ export struct HouseholdBoard {
     if (name.length > 40 || titles.length === 0 || titles.length > 50 || titles.some((line: string) => line.length > 120)) {
       this.toast('请检查清单名、标题和数量（最多 50 张）'); return;
     }
-    if (titles.length > 1 && (detail || this.draftPhotos.length > 0)) { this.toast('备注和照片仅用于单张卡片'); return; }
-    const key = JSON.stringify([name, titles, detail, this.draftPhotos]);
+    const steps = this.draftSteps.map((step: HouseholdStep) => this.copyStep(step, step.title.trim()));
+    if (titles.length > 1 && (detail || this.draftPhotos.length > 0 || this.draftDeadline > 0 || steps.length > 0)) {
+      this.toast('备注、照片、截止时间和子清单仅用于单张卡片'); return;
+    }
+    if (steps.some((step: HouseholdStep) => !step.title)) { this.toast('请填写或移除空白子项'); return; }
+    const key = JSON.stringify([name, titles, detail, this.draftPhotos, this.draftDeadline, steps]);
     if (key !== this.signature) {
       this.signature = key;
       this.batch = titles.map((title: string) => {
         const card = new HouseholdDraft();
         card.id = util.generateRandomUUID(); card.title = title; card.detail = detail; card.imageIds = this.draftPhotos.slice();
+        card.deadline = this.draftDeadline; card.checklist = steps;
         return card;
       });
     }

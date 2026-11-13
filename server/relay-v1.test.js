@@ -212,3 +212,31 @@ test('household cards can move, reopen for their assignee, and be deleted withou
   await request('/household/cards', batch);
   assert.deepEqual(await request(`/household/cards?familyId=${familyId}`), []);
 });
+
+test('household deadline and independent checklist ticks survive old edits and card state changes', async () => {
+  const id = randomUUID(), familyId = 'card-checklist', first = randomUUID(), second = randomUUID();
+  const deadline = Date.UTC(2028, 0, 1, 10);
+  await request('/household/cards', { familyId, userId: 'wife', items: [{ id, title: 'Pack', deadline,
+    checklist: [{ id: first, title: 'Keys', checked: true }, { id: second, title: 'Umbrella' }] }] });
+  const act = (userId, action, revision, fields = {}, status = 200) =>
+    request(`/household/cards/${id}`, { familyId, userId, action, revision, ...fields }, status);
+  let [card] = await request(`/household/cards?familyId=${familyId}`);
+  assert.equal(card.deadline, deadline);
+  assert.deepEqual(card.checklist.map(item => item.checked), [false, false]);
+  card = await act('husband', 'claim', card.revision);
+  card = await act('husband', 'check', card.revision, { itemId: first, checked: true });
+  await act('wife', 'check', card.revision - 1, { itemId: second, checked: true }, 409);
+  card = await act('wife', 'check', card.revision, { itemId: second, checked: true });
+  assert.equal(card.status, 'claimed');
+  card = await act('wife', 'edit', card.revision, { title: 'Pack bag', detail: '', list: 'Trip' });
+  assert.equal(card.deadline, deadline);
+  assert.deepEqual(card.checklist.map(item => item.checked), [true, true]);
+  card = await act('wife', 'edit', card.revision, { title: 'Pack bag', detail: '', list: 'Trip', deadline: 0,
+    checklist: [{ id: first, title: 'Car keys' }, { id: randomUUID(), title: 'Water' }] });
+  assert.equal(card.deadline, 0);
+  assert.deepEqual(card.checklist.map(item => [item.title, item.checked]), [['Car keys', true], ['Water', false]]);
+  card = await act('husband', 'complete', card.revision);
+  await act('husband', 'check', card.revision, { itemId: first, checked: false }, 409);
+  card = await act('husband', 'reopen', card.revision);
+  assert.equal(card.checklist[0].checked, true);
+});

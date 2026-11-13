@@ -133,6 +133,13 @@ User message:
 
 ## 家庭配对
 
+### 家里待办
+
+- `GET /household/cards?familyId=` 返回独立于 `/tasks` 的共享卡片。空清单名落到「日常」。添加、认领和完成不会调用派活推送。
+- `POST /household/cards`：`{ familyId, userId, list, items: [{ id, title, detail, imageIds }] }`。每批 1–50 张，客户端 UUID 用于安全重试，照片使用同家庭下的 `/uploads` ID。
+- `POST /household/cards/:id`：`{ familyId, userId, action, revision }`。`claim` 把待认领卡变为进行中，只有认领人可以 `release` 或 `complete`。版本冲突返回 409，客户端重新拉取；完成保留认领人和完成时间。
+- 原生鸿蒙与 Android 兼容端只在本地把本人认领的进行中卡片投影到收集箱，不写入 `/tasks`、不纳入派活回执，旧 iOS 不受影响。
+
 ### 周期任务
 
 - `POST /tasks` 可带 `repeat: { kind, days }`。`kind` 为 `weekly`、`monthly` 或 `afterDone`。前两种需要首次截止时间；后一种 `days` 为 1–365，首次截止可留空。

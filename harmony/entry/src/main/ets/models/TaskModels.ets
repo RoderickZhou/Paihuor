@@ -68,5 +68,6 @@ export class TaskItem {
   recipientSyncedAt: number = 0;
   clientRequestId: string = '';
   repeat?: RepeatRule;
+  householdId?: string;
   doneAt: number = 0;
 }

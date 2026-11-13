@@ -2,6 +2,7 @@ import { http } from '@kit.NetworkKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { AppConfig } from '../config/AppConfig';
 import { TaskItem, TaskImage } from '../models/TaskModels';
+import { HouseholdCard, HouseholdDraft } from '../models/HouseholdCard';
 
 const TAG = 'RelayService';
 
@@ -34,6 +35,20 @@ interface RepeatActionBody {
   familyId: string;
   userId: string;
   action: string;
+}
+
+interface HouseholdBatch {
+  familyId: string;
+  userId: string;
+  list: string;
+  items: HouseholdDraft[];
+}
+
+interface HouseholdAction {
+  familyId: string;
+  userId: string;
+  action: string;
+  revision: number;
 }
 
 // 跨设备中继客户端：优先局域网直连(快)，连不上回退 cloudflared 公网
@@ -209,6 +224,44 @@ export class RelayService {
     } finally {
       client.destroy();
     }
+  }
+
+  async household(family: string): Promise<HouseholdCard[] | null> {
+    const base = await this.base();
+    const client = http.createHttp();
+    try {
+      const response = await client.request(base + '/household/cards?familyId=' + encodeURIComponent(family), {
+        method: http.RequestMethod.GET, header: this.header(), connectTimeout: 6000, readTimeout: 8000
+      });
+      return response.responseCode === 200 ? JSON.parse(response.result as string) as HouseholdCard[] : null;
+    } catch (err) {
+      this.resetBase();
+      return null;
+    } finally { client.destroy(); }
+  }
+
+  async addHousehold(family: string, user: string, list: string, items: HouseholdDraft[]): Promise<boolean> {
+    const data: HouseholdBatch = { familyId: family, userId: user, list: list, items: items };
+    return this.writeHousehold('/household/cards', JSON.stringify(data));
+  }
+
+  async householdAction(card: HouseholdCard, user: string, action: string): Promise<boolean> {
+    const data: HouseholdAction = { familyId: card.familyId, userId: user, action: action, revision: card.revision };
+    return this.writeHousehold('/household/cards/' + encodeURIComponent(card.id), JSON.stringify(data));
+  }
+
+  private async writeHousehold(path: string, body: string): Promise<boolean> {
+    const base = await this.base();
+    const client = http.createHttp();
+    try {
+      const response = await client.request(base + path, {
+        method: http.RequestMethod.POST, header: this.header(), extraData: body, connectTimeout: 6000, readTimeout: 8000
+      });
+      return response.responseCode === 200;
+    } catch (err) {
+      this.resetBase();
+      return false;
+    } finally { client.destroy(); }
   }
 
   // 上传一张图片（原始字节 body + Content-Type: image/*），返回中继分配的附件元数据

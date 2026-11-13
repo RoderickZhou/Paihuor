@@ -15,6 +15,7 @@ const path = require('path');
 const crypto = require('crypto');
 const { DatabaseSync } = require('node:sqlite');
 const { parseRule, nextDeadline } = require('./recurrence');
+const household = require('./household');
 
 const PORT = process.env.PORT || 8787;
 const SECRET = process.env.PAIHUOR_KEY || 'CHANGE_ME';
@@ -162,6 +163,7 @@ function getSeries(id) {
 const isRole = value => value === 'wife' || value === 'husband';
 const isFamily = value => typeof value === 'string' && value.trim() === value && value.length > 0 && value.length <= 120;
 const isUuid = value => typeof value === 'string' && /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(value);
+const householdCards = household(db, { isRole, isFamily, isUuid, transaction });
 
 function nextTaskTime() {
   const latest = db.prepare('SELECT updatedAt FROM tasks ORDER BY updatedAt DESC LIMIT 1').get();
@@ -358,7 +360,7 @@ setInterval(purgeTombstones, 24 * 3600 * 1000);
 function referencedImageIds() {
   const set = new Set();
   try {
-    for (const r of db.prepare('SELECT images FROM tasks').all()) {
+    for (const r of db.prepare('SELECT images FROM tasks UNION ALL SELECT images FROM household_cards').all()) {
       try { JSON.parse(r.images || '[]').forEach((im) => { if (im && im.id) set.add(im.id); }); } catch (e) {}
     }
   } catch (e) {}
@@ -644,6 +646,13 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (req.headers['x-paihuor-key'] !== SECRET) return send(res, 401, { error: 'bad key' });
+
+  if (url.pathname === '/household/cards') {
+    if (req.method === 'GET') return send(res, ...householdCards.list(url.searchParams.get('familyId')));
+    if (req.method === 'POST') return send(res, ...householdCards.create(await readBody(req)));
+  }
+  const cardRoute = /^\/household\/cards\/([^/]+)$/.exec(url.pathname);
+  if (req.method === 'POST' && cardRoute) return send(res, ...householdCards.act(cardRoute[1], await readBody(req)));
 
   // 管理台数据：全部任务（含归档/墓碑），按 updatedAt 倒序
   if (req.method === 'GET' && url.pathname === '/admin/list') {

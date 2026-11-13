@@ -78,6 +78,15 @@ public final class MainActivity extends Activity implements TaskAdapter.Listener
     private TaskAdapter adapter;
     private boolean archive;
     private RelayClient relay;
+    private HouseholdBoard household;
+    private static final int PICK_HOUSEHOLD_IMAGE = 3010;
+    private final android.os.Handler householdTimer = new android.os.Handler(android.os.Looper.getMainLooper());
+    private final Runnable refreshHousehold = new Runnable() {
+        @Override public void run() {
+            if (Profile.isComplete(MainActivity.this)) household.refresh();
+            householdTimer.postDelayed(this, 8000);
+        }
+    };
     private long draftDeadline;
     private final List<PendingImage> pendingImages = new ArrayList<>();
     private LinearLayout imagePreviewRow;
@@ -99,6 +108,10 @@ public final class MainActivity extends Activity implements TaskAdapter.Listener
         getWindow().setStatusBarColor(Color.BLACK);
         getWindow().setNavigationBarColor(Color.BLACK);
         relay = new RelayClient(this);
+        household = new HouseholdBoard(this, new RelayClient(this), this::refreshList, () -> {
+            Intent picker = new Intent(Intent.ACTION_OPEN_DOCUMENT).setType("image/*").addCategory(Intent.CATEGORY_OPENABLE);
+            startActivityForResult(picker, PICK_HOUSEHOLD_IMAGE);
+        });
         requestNotificationPermission();
         registerReceiver(syncedReceiver, new IntentFilter("dev.zx.paihuor.SYNCED"),
                 Build.VERSION.SDK_INT >= 33 ? Context.RECEIVER_NOT_EXPORTED : 0);
@@ -113,8 +126,14 @@ public final class MainActivity extends Activity implements TaskAdapter.Listener
     }
 
     @Override protected void onPause() {
+        householdTimer.removeCallbacks(refreshHousehold);
         if (voiceInput != null) voiceInput.cancelRecording();
         super.onPause();
+    }
+
+    @Override protected void onResume() {
+        super.onResume();
+        householdTimer.post(refreshHousehold);
     }
 
     @Override public void onRequestPermissionsResult(int request, String[] permissions, int[] grants) {
@@ -325,6 +344,9 @@ public final class MainActivity extends Activity implements TaskAdapter.Listener
         header.addView(titleView, titleParams);
 
         ImageButton grid = iconButton(R.drawable.icon_grid, R.drawable.circle_white);
+        grid.setContentDescription("家里待办");
+        grid.setTooltipText("家里待办");
+        grid.setOnClickListener(view -> household.show());
         FrameLayout.LayoutParams gridParams = new FrameLayout.LayoutParams(dp(52), dp(52), Gravity.END | Gravity.CENTER_VERTICAL);
         gridParams.rightMargin = dp(24);
         header.addView(grid, gridParams);
@@ -371,7 +393,9 @@ public final class MainActivity extends Activity implements TaskAdapter.Listener
     private void refreshList() {
         if (adapter == null || !Profile.isComplete(this)) return;
         long now = System.currentTimeMillis(), tomorrow = TaskRepository.tomorrow(now);
-        List<TaskItem> visible = TaskRepository.visible(TaskCache.load(this), Profile.familyId(this),
+        List<TaskItem> source = TaskCache.load(this);
+        if (!archive) source.addAll(household.claimed(Profile.familyId(this), Profile.userId(this)));
+        List<TaskItem> visible = TaskRepository.visible(source, Profile.familyId(this),
                 Profile.userId(this), archive, direction, now, tomorrow);
         for (int i = 0; i < directionButtons.size(); i++) {
             Button filter = directionButtons.get(i);
@@ -408,9 +432,11 @@ public final class MainActivity extends Activity implements TaskAdapter.Listener
         menu.getMenu().add("家庭设置");
         menu.getMenu().add("立即同步");
         menu.getMenu().add("复制上次");
+        menu.getMenu().add("家里待办");
         menu.setOnMenuItemClickListener(item -> {
             if ("家庭设置".contentEquals(item.getTitle())) showPairing();
             else if ("复制上次".contentEquals(item.getTitle())) copyLast();
+            else if ("家里待办".contentEquals(item.getTitle())) household.show();
             else syncNow(true);
             return true;
         });
@@ -797,6 +823,15 @@ public final class MainActivity extends Activity implements TaskAdapter.Listener
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == PICK_HOUSEHOLD_IMAGE) {
+            if (resultCode == RESULT_OK && data != null && data.getData() != null) new Thread(() -> {
+                PendingImage photo = prepareImage(data.getData());
+                runOnUiThread(() -> {
+                    if (photo == null) toast("无法读取照片"); else household.attach(photo.bytes, photo.width, photo.height);
+                });
+            }, "household-photo").start();
+            return;
+        }
         IntentResult scanned = IntentIntegrator.parseActivityResult(requestCode, resultCode, data);
         if (scanned != null) {
             String value = scanned.getContents();
@@ -858,6 +893,7 @@ public final class MainActivity extends Activity implements TaskAdapter.Listener
     }
 
     @Override public void onOpen(TaskItem item) {
+        if (item.household != null) { household.detail(item.household); return; }
         if (item.queued) {
             new AlertDialog.Builder(this).setTitle("待发送").setMessage(item.title)
                     .setPositiveButton("立即重试", (dialog, which) -> startForegroundService(new Intent(this, PollService.class)))
@@ -867,6 +903,7 @@ public final class MainActivity extends Activity implements TaskAdapter.Listener
 
     @Override
     public void onCheck(TaskItem item) {
+        if (item.household != null) { household.change(item.household, "complete", null); return; }
         if (item.archived || !item.toUserId.equals(Profile.userId(this))) return;
         long now = System.currentTimeMillis();
         TaskRepository.advance(item, now);
@@ -876,6 +913,7 @@ public final class MainActivity extends Activity implements TaskAdapter.Listener
 
     @Override
     public void onMore(TaskItem item, View anchor) {
+        if (item.household != null) { household.detail(item.household); return; }
         if (item.queued) { onOpen(item); return; }
         PopupMenu menu = new PopupMenu(this, anchor);
         if (!item.archived && !"done".equals(item.status)) menu.getMenu().add("商量");

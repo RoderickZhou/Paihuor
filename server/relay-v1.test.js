@@ -1,5 +1,6 @@
 const { test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
+const { randomUUID } = require('node:crypto');
 const { spawn } = require('node:child_process');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -136,4 +137,53 @@ test('skipping a live occurrence is safe to retry and removing the successor sto
   rows = await request('/tasks?familyId=skip-retry&caps=v2');
   assert.equal(rows.length, 2);
   assert.equal(rows.some(row => row.repeat.current), false);
+});
+
+test('household cards batch idempotently and only one member can claim an available card', async () => {
+  const familyId = 'household-pool';
+  const items = [{ id: randomUUID(), title: 'Check tyres' }, { id: randomUUID(), title: 'Pack umbrellas' }];
+  const batch = { familyId, userId: 'wife', list: 'Weekend', items };
+  await request('/household/cards', batch);
+  await request('/household/cards', batch);
+  let cards = await request(`/household/cards?familyId=${familyId}`);
+  assert.equal(cards.length, 2);
+  assert.equal(cards[0].list, 'Weekend');
+  assert.equal(cards[0].status, 'available');
+  const id = items[0].id;
+  const action = (userId, action, revision, code = 200, family = familyId) =>
+    request(`/household/cards/${id}`, { familyId: family, userId, action, revision }, code);
+  await action('wife', 'claim', 0, 404, 'wrong-family');
+  const claim = await action('husband', 'claim', 0);
+  await action('wife', 'claim', 0, 409);
+  await action('wife', 'complete', claim.revision, 403);
+  const returned = await action('husband', 'release', claim.revision);
+  const again = await action('wife', 'claim', returned.revision);
+  await action('husband', 'release', claim.revision, 409);
+  const done = await action('wife', 'complete', again.revision);
+  assert.equal(done.status, 'done');
+  assert.equal(done.assignee, 'wife');
+  assert.ok(done.doneAt > 0);
+  cards = await request(`/household/cards?familyId=${familyId}`);
+  assert.equal(cards.find(card => card.id === id).status, 'done');
+  assert.deepEqual(await request(`/tasks?familyId=${familyId}&caps=v2`), []);
+});
+
+test('invalid household batches are atomic and photos must belong to the same family', async () => {
+  const familyId = 'photo-board';
+  const row = { id: randomUUID(), title: 'Check the photo', detail: 'Bring the right part' };
+  await request('/household/cards', { familyId, userId: 'wife', items: [row, { ...row, title: '  ' }] }, 400);
+  assert.deepEqual(await request(`/household/cards?familyId=${familyId}`), []);
+  const response = await fetch(base + `/uploads?familyId=${familyId}&w=1&h=1`, {
+    method: 'POST', headers: { 'x-paihuor-key': key, 'Content-Type': 'image/png' },
+    body: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j7skAAAAASUVORK5CYII=', 'base64')
+  });
+  assert.equal(response.status, 200);
+  const photo = await response.json();
+  row.imageIds = [photo.id];
+  await request('/household/cards', { familyId: 'wrong-family', userId: 'wife', items: [row] }, 400);
+  await request('/household/cards', { familyId, userId: 'wife', items: [row] });
+  const [card] = await request(`/household/cards?familyId=${familyId}`);
+  assert.equal(card.list, '日常');
+  assert.equal(card.detail, row.detail);
+  assert.equal(card.images[0].id, photo.id);
 });

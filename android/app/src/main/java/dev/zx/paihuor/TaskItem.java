@@ -21,6 +21,7 @@ public final class TaskItem {
     public long recipientSyncedAt;
     public String clientRequestId = "";
     public boolean queued;
+    HouseholdCard household;
     public String repeatKind = "";
     public int repeatDays;
     public boolean repeatPaused;

@@ -42,7 +42,7 @@ public final class TaskRepository {
         for (TaskItem item : all) {
             if (!item.deleted && item.belongsTo(familyId, userId) && item.archived == archive
                     && (direction != Direction.INCOMING || item.toUserId.equals(userId))
-                    && (direction != Direction.OUTGOING || item.fromUserId.equals(userId))) {
+                    && (direction != Direction.OUTGOING || (item.household == null && item.fromUserId.equals(userId)))) {
                 result.add(item);
             }
         }

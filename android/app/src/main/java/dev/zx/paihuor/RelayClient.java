@@ -30,6 +30,21 @@ public final class RelayClient {
         return new JSONArray(request("GET", query, null, null));
     }
 
+    public JSONArray household(String family) throws Exception {
+        return new JSONArray(request("GET", "/household/cards?familyId=" + encode(family), null, null));
+    }
+
+    public void addHousehold(String family, String user, String list, JSONArray cards) throws Exception {
+        JSONObject body = new JSONObject().put("familyId", family).put("userId", user).put("list", list).put("items", cards);
+        request("POST", "/household/cards", body, null);
+    }
+
+    public void householdAction(String family, String user, HouseholdCard card, String action) throws Exception {
+        JSONObject body = new JSONObject().put("familyId", family).put("userId", user)
+                .put("action", action).put("revision", card.revision);
+        request("POST", "/household/cards/" + encode(card.task.objectId), body, null);
+    }
+
     public TaskItem create(TaskItem item) throws Exception {
         return TaskJson.decode(new JSONObject(request("POST", "/tasks", TaskJson.encode(item), null)));
     }

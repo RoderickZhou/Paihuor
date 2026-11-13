@@ -17,6 +17,8 @@ import { AppConfig } from '../config/AppConfig';
 import { FamilyProfile, FamilyRole } from '../models/FamilyProfile';
 import { ProfileService } from '../services/ProfileService';
 import { InboxGroup, InboxOrder } from '../models/InboxOrder';
+import { HouseholdCard, householdTask } from '../models/HouseholdCard';
+import { HouseholdBoard } from './HouseholdBoard';
 
 @Entry
 @Component
@@ -53,6 +55,13 @@ struct Index {
   @State negProposedCode: number = 0;
   // 主屏面板：收集箱 / 归档，和 iOS 一样在同一页内切换
   @State selectedBoard: string = 'inbox';
+  @State showHousehold: boolean = false;
+  @State householdCards: HouseholdCard[] = [];
+  @State householdFailed: boolean = false;
+  @State householdLoading: boolean = true;
+  @State openedHouseholdCard: string = '';
+  private householdFamily: string = '';
+  private householdFetching: boolean = false;
   @State directionFilter: string = 'all';
   @State archivedTasks: TaskItem[] = [];
   @State archivedCount: number = 0;
@@ -133,9 +142,11 @@ struct Index {
 
   onPageShow(): void {
     this.poll();
+    this.refreshHousehold();
   }
 
   onBackPress(): boolean {
+    if (this.showHousehold) { this.showHousehold = false; return true; }
     if (!this.showCreate) return false;
     this.closeCreate();
     return true;
@@ -161,6 +172,10 @@ struct Index {
     this.doneUnarchivedCount = doneU;
     this.archivedTasks = arch;
     const board = this.selectedBoard === 'archive' ? arch : active;
+    if (this.selectedBoard === 'inbox' && this.directionFilter !== 'outgoing' && this.householdFamily === this.familyId) {
+      this.householdCards.filter((card: HouseholdCard) => card.status === 'claimed' && card.assignee === this.myUserId)
+        .forEach((card: HouseholdCard) => { board.push(householdTask(card)); });
+    }
     const visible = board.filter((t: TaskItem) => this.directionFilter === 'all'
       || (this.directionFilter === 'incoming' ? t.toUserId === this.myUserId : t.fromUserId === this.myUserId));
     this.boardNow = Date.now();
@@ -178,8 +193,41 @@ struct Index {
 
   startPolling(): void {
     this.poll();
+    this.refreshHousehold();
     // 8s 轮询：待办不需要秒级实时，省流量(免费穿透档)并降中继压力
-    this.pollTimer = setInterval(() => { this.poll(); }, 8000);
+    this.pollTimer = setInterval(() => { this.poll(); this.refreshHousehold(); }, 8000);
+  }
+
+  private openHousehold(id: string = ''): void {
+    this.openedHouseholdCard = id;
+    this.showHousehold = true;
+    this.refreshHousehold();
+  }
+
+  private async refreshHousehold(): Promise<void> {
+    const family = this.familyId;
+    if (!this.profileConfigured || !family || this.householdFetching) return;
+    if (family !== this.householdFamily) {
+      this.householdFamily = family;
+      this.householdCards = [];
+      this.householdLoading = true;
+      this.householdFailed = false;
+    }
+    this.householdFetching = true;
+    try {
+      const cards = await RelayService.getInstance().household(family);
+      if (family !== this.familyId) return;
+      this.householdFailed = cards === null;
+      this.householdLoading = false;
+      if (cards && (cards.length !== this.householdCards.length || cards.some((card: HouseholdCard, i: number) =>
+        card.id !== this.householdCards[i].id || card.revision !== this.householdCards[i].revision))) {
+        this.householdCards = cards;
+        this.refresh();
+      }
+    } finally {
+      this.householdFetching = false;
+      if (family !== this.familyId) this.refreshHousehold();
+    }
   }
 
   stopPolling(): void {
@@ -514,6 +562,12 @@ struct Index {
         this.ProfileSetup(true)
       }
 
+      if (this.showHousehold) {
+        HouseholdBoard({ cards: this.householdCards, family: this.familyId, user: this.myUserId,
+          openedCard: this.openedHouseholdCard, failed: this.householdFailed, loading: this.householdLoading,
+          onClose: () => { this.showHousehold = false; }, onRefresh: () => { this.refreshHousehold(); } })
+      }
+
     }
     .width('100%')
     .height('100%')
@@ -673,10 +727,11 @@ struct Index {
     }
     .width(52)
     .height(52)
+    .accessibilityText(kind === 'grid' ? '家里待办' : '家庭设置')
     .onClick(() => {
       if (kind === 'menu') {
         this.openProfileSettings();
-      }
+      } else this.openHousehold();
     })
   }
 
@@ -804,7 +859,8 @@ struct Index {
       .layoutWeight(1)
       .alignItems(HorizontalAlign.Start)
       .onClick(() => {
-        if (this.isQueued(item)) this.poll(); else this.openDetail(item);
+        if (item.householdId) this.openHousehold(item.householdId);
+        else if (this.isQueued(item)) this.poll(); else this.openDetail(item);
       })
     }
     .width('100%')
@@ -836,7 +892,7 @@ struct Index {
   @Builder
   SwipeEnd(item: TaskItem) {
     Row() {
-      if (!this.isQueued(item)) {
+      if (!this.isQueued(item) && !item.householdId) {
       if (!item.archived && item.status !== TaskStatus.DONE) {
         this.SwipeBtn('商量', Constants.COLOR_WARNING, () => { this.openNegotiate(item); })
       }
@@ -2241,6 +2297,7 @@ struct Index {
 
   // 点方形框推进状态：仅接收方；待收到/商量中→收到，收到→完成(并自动归档)
   onCheckbox(item: TaskItem): void {
+    if (item.householdId) { this.openHousehold(item.householdId); return; }
     if (item.archived || !this.isReceiver(item)) {
       return;
     }
@@ -2252,6 +2309,7 @@ struct Index {
   }
 
   private directionLabel(item: TaskItem): string {
+    if (item.householdId) return '家里待办 · 我已认领';
     let st = item.repeat?.skippedAt ? '已跳过' : this.statusLabel(item.status);
     const img = (item.images.length > 0 ? (' · 📷' + item.images.length) : '')
       + (item.repeat ? (' · ' + this.repeatLabel(item.repeat.kind, item.repeat.days)

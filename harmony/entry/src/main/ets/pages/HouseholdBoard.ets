@@ -25,6 +25,10 @@ export struct HouseholdBoard {
   @State writing: boolean = false;
   @State uploading: boolean = false;
   @State detailId: string = '';
+  @State editTarget: HouseholdCard | null = null;
+  @State editTitle: string = '';
+  @State editNote: string = '';
+  @State editList: string = '';
   @State photos: image.PixelMap[] = [];
   private signature: string = '';
   private batch: HouseholdDraft[] = [];
@@ -98,6 +102,7 @@ export struct HouseholdBoard {
           this.Detail(card)
         }, (card: HouseholdCard) => card.id + ':' + card.revision)
       }
+      if (this.editTarget) this.EditCard()
     }.width('100%').height('100%')
   }
 
@@ -117,6 +122,7 @@ export struct HouseholdBoard {
         this.ActionButton('放回', 'release', card)
         this.ActionButton('完成', 'complete', card)
       }
+      if (card.status === 'done' && card.assignee === this.user) this.ActionButton('撤销完成', 'reopen', card)
     }.width('100%')
   }
 
@@ -174,11 +180,88 @@ export struct HouseholdBoard {
             Image(photo).height(180).width('100%').objectFit(ImageFit.Contain).accessibilityText('卡片照片')
           })
           this.Actions(card)
+          if (card.creator === this.user || card.assignee === this.user) {
+            Row({ space: 8 }) {
+              Button('编辑／移动').height(44).layoutWeight(1).fontSize(14).enabled(!this.writing)
+                .fontColor(Constants.COLOR_PRIMARY_DARK).backgroundColor(Constants.COLOR_BG).onClick(() => { this.beginEdit(card); })
+              if (card.creator === this.user) {
+                Button('删除').height(44).layoutWeight(1).fontSize(14).enabled(!this.writing)
+                  .fontColor('#B43D45').backgroundColor(Constants.COLOR_BG).onClick(() => { this.confirmDelete(card); })
+              }
+            }.width('100%')
+          }
           Button('关闭').height(44).width('100%').fontColor(Constants.COLOR_PRIMARY_DARK).backgroundColor(Constants.COLOR_BG)
             .onClick(() => { this.detailId = ''; this.photos = []; })
         }.width('100%').padding(18).backgroundColor(Color.White)
       }.width('100%').constraintSize({ maxHeight: '92%' }).scrollBar(BarState.Off)
     }.width('100%').height('100%').backgroundColor('#66000000')
+  }
+
+  @Builder
+  EditCard() {
+    Column() {
+      Blank().layoutWeight(1)
+      Scroll() {
+        Column({ space: 8 }) {
+          Text('编辑卡片').fontSize(19).fontWeight(FontWeight.Bold).width('100%').fontColor(Constants.COLOR_TEXT_PRIMARY)
+          Text('卡片标题').fontSize(14).width('100%').fontColor(Constants.COLOR_TEXT_PRIMARY)
+          TextInput({ text: this.editTitle, placeholder: '卡片标题' }).height(44).fontColor(Color.Black)
+            .backgroundColor(Constants.COLOR_BG).maxLength(120).onChange((value: string) => { this.editTitle = value; })
+          Text('备注').fontSize(14).width('100%').fontColor(Constants.COLOR_TEXT_PRIMARY)
+          TextArea({ text: this.editNote, placeholder: '备注' }).height(84).fontColor(Color.Black)
+            .backgroundColor(Constants.COLOR_BG).maxLength(2000).onChange((value: string) => { this.editNote = value; })
+          Text('移动到清单').fontSize(14).width('100%').fontColor(Constants.COLOR_TEXT_PRIMARY)
+          TextInput({ text: this.editList, placeholder: '日常' }).height(44).fontColor(Color.Black)
+            .backgroundColor(Constants.COLOR_BG).maxLength(40).onChange((value: string) => { this.editList = value; })
+          Button('选择已有清单').height(42).fontSize(14).width('100%').bindMenu(this.editListOptions())
+            .fontColor(Constants.COLOR_PRIMARY_DARK).backgroundColor(Constants.COLOR_BG)
+          Row({ space: 8 }) {
+            Button('取消').height(44).layoutWeight(1).enabled(!this.writing).backgroundColor(Constants.COLOR_BG)
+              .fontColor(Constants.COLOR_PRIMARY_DARK).onClick(() => { this.editTarget = null; })
+            Button('保存').height(44).layoutWeight(1).enabled(!this.writing).backgroundColor(Constants.COLOR_PRIMARY)
+              .onClick(() => { this.saveEdit(); })
+          }.width('100%')
+        }.width('100%').padding(18).backgroundColor(Color.White)
+      }.width('100%').constraintSize({ maxHeight: '92%' }).scrollBar(BarState.Off)
+    }.width('100%').height('100%').backgroundColor('#66000000')
+  }
+
+  private editListOptions(): MenuElement[] {
+    const names = new Set<string>(['日常']);
+    this.cards.forEach((card: HouseholdCard) => { names.add(card.list); });
+    const options: MenuElement[] = [];
+    names.forEach((name: string) => { options.push({ value: name, action: () => { this.editList = name; } }); });
+    return options;
+  }
+
+  private beginEdit(card: HouseholdCard): void {
+    this.editTitle = card.title;
+    this.editNote = card.detail;
+    this.editList = card.list;
+    this.editTarget = card;
+  }
+
+  private async saveEdit(): Promise<void> {
+    const card = this.editTarget;
+    const title = this.editTitle.trim(), note = this.editNote.trim(), list = this.editList.trim() || '日常';
+    if (!card || this.writing) return;
+    if (!title || title.length > 120 || note.length > 2000 || list.length > 40) { this.toast('请检查标题、备注和清单名'); return; }
+    this.writing = true;
+    try {
+      if (await RelayService.getInstance().editHousehold(card, this.user, title, note, list)) {
+        this.editTarget = null;
+        this.detailId = '';
+        this.photos = [];
+        this.list = list;
+      } else this.toast('保存失败，修改未丢失');
+      this.onRefresh();
+    } finally { this.writing = false; }
+  }
+
+  private confirmDelete(card: HouseholdCard): void {
+    this.getUIContext().showAlertDialog({ title: '删除卡片？', message: '这张卡会从两台手机上移除。',
+      primaryButton: { value: '删除', fontColor: '#B43D45', action: () => { this.change(card, 'delete'); } },
+      secondaryButton: { value: '取消', action: () => {} } });
   }
 
   private listOptions(): MenuElement[] {
@@ -229,6 +312,7 @@ export struct HouseholdBoard {
       this.detailId = '';
       this.photos = [];
       if (!ok) this.toast('卡片状态可能已变化，正在刷新');
+      else if (action === 'reopen') this.tab = 'claimed';
       this.onRefresh();
     } finally { this.writing = false; }
   }

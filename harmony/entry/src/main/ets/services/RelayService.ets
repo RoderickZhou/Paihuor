@@ -49,6 +49,9 @@ interface HouseholdAction {
   userId: string;
   action: string;
   revision: number;
+  title?: string;
+  detail?: string;
+  list?: string;
 }
 
 // 跨设备中继客户端：优先局域网直连(快)，连不上回退 cloudflared 公网
@@ -247,6 +250,12 @@ export class RelayService {
 
   async householdAction(card: HouseholdCard, user: string, action: string): Promise<boolean> {
     const data: HouseholdAction = { familyId: card.familyId, userId: user, action: action, revision: card.revision };
+    return this.writeHousehold('/household/cards/' + encodeURIComponent(card.id), JSON.stringify(data));
+  }
+
+  async editHousehold(card: HouseholdCard, user: string, title: string, detail: string, list: string): Promise<boolean> {
+    const data: HouseholdAction = { familyId: card.familyId, userId: user, action: 'edit', revision: card.revision,
+      title: title, detail: detail, list: list };
     return this.writeHousehold('/household/cards/' + encodeURIComponent(card.id), JSON.stringify(data));
   }
 

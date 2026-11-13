@@ -40,8 +40,11 @@ public final class RelayClient {
     }
 
     public void householdAction(String family, String user, HouseholdCard card, String action) throws Exception {
-        JSONObject body = new JSONObject().put("familyId", family).put("userId", user)
-                .put("action", action).put("revision", card.revision);
+        householdAction(family, user, card, action, new JSONObject());
+    }
+
+    void householdAction(String family, String user, HouseholdCard card, String action, JSONObject body) throws Exception {
+        body.put("familyId", family).put("userId", user).put("action", action).put("revision", card.revision);
         request("POST", "/household/cards/" + encode(card.task.objectId), body, null);
     }
 

@@ -343,13 +343,6 @@ public final class MainActivity extends Activity implements TaskAdapter.Listener
         titleParams.leftMargin = dp(90);
         header.addView(titleView, titleParams);
 
-        ImageButton grid = iconButton(R.drawable.icon_grid, R.drawable.circle_white);
-        grid.setContentDescription("家里待办");
-        grid.setTooltipText("家里待办");
-        grid.setOnClickListener(view -> household.show());
-        FrameLayout.LayoutParams gridParams = new FrameLayout.LayoutParams(dp(52), dp(52), Gravity.END | Gravity.CENTER_VERTICAL);
-        gridParams.rightMargin = dp(24);
-        header.addView(grid, gridParams);
         return header;
     }
 
@@ -362,13 +355,25 @@ public final class MainActivity extends Activity implements TaskAdapter.Listener
         inboxButton.setBackgroundResource(R.drawable.dock_active_background);
         archiveButton = dockButton(R.drawable.icon_archive);
         ImageButton refresh = dockButton(R.drawable.icon_refresh);
+        ImageButton grid = dockButton(R.drawable.icon_grid);
+        grid.setOnClickListener(view -> household.show());
+        dockLabel(inboxButton, "收集箱");
+        dockLabel(grid, "家里待办");
+        dockLabel(archiveButton, "归档");
+        dockLabel(refresh, "刷新");
         dock.addView(inboxButton, weighted());
+        dock.addView(grid, weighted());
         dock.addView(archiveButton, weighted());
         dock.addView(refresh, weighted());
         inboxButton.setOnClickListener(view -> switchBoard(false));
         archiveButton.setOnClickListener(view -> switchBoard(true));
         refresh.setOnClickListener(view -> syncNow(true));
         return dock;
+    }
+
+    private void dockLabel(ImageButton button, String label) {
+        button.setContentDescription(label);
+        button.setTooltipText(label);
     }
 
     private View fab() {

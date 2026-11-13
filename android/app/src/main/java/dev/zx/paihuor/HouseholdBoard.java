@@ -218,7 +218,61 @@ final class HouseholdBoard {
         ScrollView scroll = new ScrollView(activity); scroll.addView(body);
         AlertDialog dialog = new AlertDialog.Builder(activity).setTitle(card.task.title).setView(scroll).setNegativeButton("关闭", null).create();
         actions(body, card, dialog);
+        String user = Profile.userId(activity);
+        boolean creator = user.equals(card.task.fromUserId);
+        if (creator || user.equals(card.assignee)) {
+            LinearLayout tools = new LinearLayout(activity);
+            Button edit = button("编辑／移动");
+            edit.setTextColor(BLUE);
+            edit.setOnClickListener(v -> editCard(card, dialog));
+            tools.addView(edit, new LinearLayout.LayoutParams(0, dp(44), 1));
+            if (creator) {
+                Button remove = button("删除");
+                remove.setTextColor(0xFFB43D45);
+                remove.setOnClickListener(v -> new AlertDialog.Builder(activity).setTitle("删除卡片？")
+                        .setMessage("这张卡会从两台手机上移除。").setNegativeButton("取消", null)
+                        .setPositiveButton("删除", (confirm, which) -> change(card, "delete", dialog)).show());
+                tools.addView(remove, new LinearLayout.LayoutParams(0, dp(44), 1));
+            }
+            body.addView(tools);
+        }
         dialog.show();
+    }
+
+    private void editCard(HouseholdCard card, AlertDialog detail) {
+        LinearLayout form = column(Color.WHITE);
+        form.setPadding(dp(18), dp(8), dp(18), dp(12));
+        EditText title = input("卡片标题", card.task.title, 1);
+        EditText note = input("备注", card.task.detail, 3);
+        EditText list = input("清单名", card.list, 1);
+        form.addView(text("卡片标题", 14, MUTED, false)); form.addView(title);
+        form.addView(text("备注", 14, MUTED, false)); form.addView(note);
+        form.addView(text("移动到清单", 14, MUTED, false)); form.addView(list);
+        Button choose = button("选择已有清单");
+        choose.setOnClickListener(v -> {
+            LinkedHashSet<String> names = new LinkedHashSet<>(); names.add("日常");
+            for (HouseholdCard item : cards) names.add(item.list);
+            String[] choices = names.toArray(new String[0]);
+            new AlertDialog.Builder(activity).setTitle("移动到清单").setItems(choices, (d, i) -> list.setText(choices[i])).show();
+        });
+        form.addView(choose);
+        ScrollView scroll = new ScrollView(activity); scroll.addView(form);
+        AlertDialog editor = new AlertDialog.Builder(activity).setTitle("编辑卡片").setView(scroll)
+                .setNegativeButton("取消", null).setPositiveButton("保存", null).show();
+        editor.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
+            if (writing) return;
+            String name = title.getText().toString().trim(), notes = note.getText().toString().trim(), group = list.getText().toString().trim();
+            if (name.isEmpty() || name.length() > 120 || notes.length() > 2000 || group.length() > 40) {
+                toast("请检查标题、备注和清单名"); return;
+            }
+            String current = Profile.familyId(activity), user = Profile.userId(activity);
+            if (!current.equals(card.task.familyId)) return;
+            writing = true;
+            run(() -> {
+                relay.householdAction(current, user, card, "edit", new JSONObject().put("title", name).put("detail", notes).put("list", group));
+                ui(() -> { writing = false; editor.dismiss(); detail.dismiss(); selectedList = group.isEmpty() ? "日常" : group; render(null); refresh(); });
+            }, error -> { writing = false; toast("保存失败，修改未丢失"); refresh(); });
+        });
     }
 
     private void actions(LinearLayout parent, HouseholdCard card, AlertDialog detail) {
@@ -227,7 +281,7 @@ final class HouseholdBoard {
         else if (card.state.equals("claimed") && card.assignee.equals(Profile.userId(activity))) {
             action(bar, "放回", card, "release", detail);
             action(bar, "完成", card, "complete", detail);
-        }
+        } else if (card.state.equals("done") && card.assignee.equals(Profile.userId(activity))) action(bar, "撤销完成", card, "reopen", detail);
         if (bar.getChildCount() > 0) parent.addView(bar);
     }
 
@@ -245,7 +299,7 @@ final class HouseholdBoard {
         writing = true;
         run(() -> {
             relay.householdAction(current, role, card, action);
-            ui(() -> { writing = false; if (detail != null) detail.dismiss(); refresh(); });
+            ui(() -> { writing = false; if (detail != null) detail.dismiss(); if (action.equals("reopen")) { tab = 1; render(null); } refresh(); });
         }, error -> { writing = false; if (detail != null) detail.dismiss(); toast("卡片状态可能已变化，正在刷新"); refresh(); });
     }
 

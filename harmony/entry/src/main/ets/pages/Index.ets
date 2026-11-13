@@ -468,7 +468,7 @@ struct Index {
       Column() {
         // 顶部标题 + 快捷入口
         Row() {
-          this.TopCircleIcon('menu')
+          this.SettingsIcon()
           Text(this.boardTitle())
             .fontSize(28)
             .fontWeight(FontWeight.Bold)
@@ -482,7 +482,6 @@ struct Index {
               .margin({ right: 8 })
               .onClick(() => { this.onArchiveAllDone(); })
           }
-          this.TopCircleIcon('grid')
         }
         .width('100%')
         .padding({ left: 24, right: 24, top: 16, bottom: 14 })
@@ -710,29 +709,19 @@ struct Index {
   }
 
   @Builder
-  TopCircleIcon(kind: string) {
+  SettingsIcon() {
     Stack() {
       Column()
         .width(52)
         .height(52)
         .borderRadius(26)
         .backgroundColor('#CCFFFFFF')
-      if (kind === 'grid') {
-        Image($r('app.media.ic_top_grid'))
-          .width(26).height(26)
-      } else {
-        Image($r('app.media.ic_top_menu'))
-          .width(26).height(26)
-      }
+      Image($r('app.media.ic_top_menu')).width(26).height(26)
     }
     .width(52)
     .height(52)
-    .accessibilityText(kind === 'grid' ? '家里待办' : '家庭设置')
-    .onClick(() => {
-      if (kind === 'menu') {
-        this.openProfileSettings();
-      } else this.openHousehold();
-    })
+    .accessibilityText('家庭设置')
+    .onClick(() => { this.openProfileSettings(); })
   }
 
   @Builder
@@ -740,10 +729,17 @@ struct Index {
     Row() {
       Row() {
         this.DockInboxIcon()
+        Stack() {
+          Image($r('app.media.ic_top_grid')).width(26).height(26)
+        }
+        .width(48).height(48).accessibilityText('家里待办')
+        .onClick(() => { this.openHousehold(); })
         this.DockArchiveIcon()
-        Image($r('app.media.ic_refresh'))
-          .width(30).height(30)
-          .onClick(() => { this.poll(); this.refresh(); })
+        Stack() {
+          Image($r('app.media.ic_refresh')).width(30).height(30)
+        }
+        .width(48).height(48).accessibilityText('刷新')
+        .onClick(() => { this.poll(); this.refresh(); this.refreshHousehold(); })
       }
       .width('86%')
       .height(68)
@@ -774,6 +770,7 @@ struct Index {
       }
     }
     .width(48).height(48)
+    .accessibilityText('收集箱')
     .onClick(() => { this.openInbox(); })
   }
 
@@ -793,6 +790,7 @@ struct Index {
       }
     }
     .width(48).height(48)
+    .accessibilityText('归档')
     .onClick(() => { this.openArchive(); })
   }
 

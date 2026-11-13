@@ -187,3 +187,28 @@ test('invalid household batches are atomic and photos must belong to the same fa
   assert.equal(card.detail, row.detail);
   assert.equal(card.images[0].id, photo.id);
 });
+
+test('household cards can move, reopen for their assignee, and be deleted without resurrection', async () => {
+  const id = randomUUID(), familyId = 'board-edit';
+  const batch = { familyId, userId: 'wife', items: [{ id, title: 'Original' }] };
+  await request('/household/cards', batch);
+  const update = (userId, action, revision, fields = {}, code = 200) =>
+    request(`/household/cards/${id}`, { familyId, userId, action, revision, ...fields }, code);
+  await update('husband', 'edit', 0, { title: 'Wrong', list: 'Weekend', detail: '' }, 403);
+  const changed = await update('wife', 'edit', 0, { title: 'New title', list: 'Weekend', detail: 'Note' });
+  assert.equal(changed.list, 'Weekend');
+  assert.equal(changed.title, 'New title');
+  assert.equal(changed.detail, 'Note');
+  const claimed = await update('husband', 'claim', changed.revision);
+  await update('husband', 'edit', changed.revision, { title: 'Stale', list: 'Old', detail: '' }, 409);
+  const done = await update('husband', 'complete', claimed.revision);
+  await update('wife', 'reopen', done.revision, {}, 403);
+  const reopened = await update('husband', 'reopen', done.revision);
+  assert.equal(reopened.status, 'claimed');
+  assert.equal(reopened.assignee, 'husband');
+  assert.equal(reopened.doneAt, 0);
+  await update('husband', 'delete', reopened.revision, {}, 403);
+  await update('wife', 'delete', reopened.revision);
+  await request('/household/cards', batch);
+  assert.deepEqual(await request(`/household/cards?familyId=${familyId}`), []);
+});

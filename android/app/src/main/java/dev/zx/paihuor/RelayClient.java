@@ -49,6 +49,11 @@ public final class RelayClient {
         return TaskJson.decode(new JSONObject(request("POST", path, fields, null)));
     }
 
+    public TaskItem repeatAction(TaskItem item, String userId, String action) throws Exception {
+        JSONObject body = new JSONObject().put("familyId", item.familyId).put("userId", userId).put("action", action);
+        return TaskJson.decode(new JSONObject(request("POST", "/tasks/" + encode(item.objectId) + "/repeat", body, null)));
+    }
+
     public void delete(TaskItem item, String userId) throws Exception {
         request("DELETE", "/tasks/" + encode(item.objectId) + "?by=" + encode(userId), null, null);
     }

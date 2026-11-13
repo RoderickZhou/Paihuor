@@ -30,6 +30,12 @@ interface SyncAcknowledgment {
   objectIds: string[];
 }
 
+interface RepeatActionBody {
+  familyId: string;
+  userId: string;
+  action: string;
+}
+
 // 跨设备中继客户端：优先局域网直连(快)，连不上回退 cloudflared 公网
 export class RelayService {
   private static instance: RelayService;
@@ -184,6 +190,24 @@ export class RelayService {
       return false;
     } finally {
       c.destroy();
+    }
+  }
+
+  async repeatAction(task: TaskItem, userId: string, action: string): Promise<TaskItem | null> {
+    const base = await this.base();
+    const client = http.createHttp();
+    try {
+      const data: RepeatActionBody = { familyId: task.familyId, userId: userId, action: action };
+      const response = await client.request(base + '/tasks/' + encodeURIComponent(task.objectId) + '/repeat', {
+        method: http.RequestMethod.POST, header: this.header(), extraData: JSON.stringify(data),
+        connectTimeout: 8000, readTimeout: 8000
+      });
+      return response.responseCode === 200 ? JSON.parse(response.result as string) as TaskItem : null;
+    } catch (err) {
+      this.resetBase();
+      return null;
+    } finally {
+      client.destroy();
     }
   }
 

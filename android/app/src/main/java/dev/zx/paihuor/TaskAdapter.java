@@ -85,6 +85,8 @@ public final class TaskAdapter extends BaseAdapter {
             meta = new SimpleDateFormat("MM月dd日 HH:mm", Locale.CHINA).format(new Date(item.deadline)) + "  ·  " + meta;
         }
         if (!item.images.isEmpty()) meta += "  ·  图片 " + item.images.size() + " 张";
+        if (!item.repeatKind.isEmpty()) meta += "  ·  " + TaskRepository.repeatLabel(item.repeatKind, item.repeatDays)
+                + (item.repeatCurrent && item.repeatPaused ? "（已暂停）" : "");
         TextView status = text(meta, 11, 0xFF9AA2B3);
         status.setPadding(0, dp(6), 0, 0);
         copy.addView(status);
@@ -122,6 +124,7 @@ public final class TaskAdapter extends BaseAdapter {
 
     private String directionText(TaskItem item) {
         String direction = item.fromUserId.equals(userId) ? "我派给对方" : "对方派给我";
+        if (item.skippedAt > 0) return direction + " · 已跳过";
         if (item.fromUserId.equals(userId) && !"done".equals(item.status) && !"negotiating".equals(item.status)) {
             return direction + " · " + TaskRepository.receipt(item);
         }

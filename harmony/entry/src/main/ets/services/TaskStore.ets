@@ -142,7 +142,10 @@ export class TaskStore {
         this.tasks[idx] = s;
         this.fixTask(this.tasks[idx]);
         this.tasks[idx].id = keepId.length > 0 ? keepId : s.objectId;
-        if (Array.isArray(keepReminders)) {
+        if (Array.isArray(keepReminders) && s.status === 'done') {
+          orphanReminders.push(...keepReminders);
+          this.tasks[idx].reminderIds = [];
+        } else if (Array.isArray(keepReminders)) {
           this.tasks[idx].reminderIds = keepReminders;
         }
       } else {

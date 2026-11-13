@@ -71,3 +71,69 @@ test('only the matching recipient profile acknowledges a task after syncing', as
   assert.equal(updates[0].status, 'pending');
   assert.ok((await request('/sync/status?familyId=receipt&userId=wife')).peerSyncedAt > 0);
 });
+
+test('completing a weekly occurrence after editing its deadline creates only one successor on the original schedule', async () => {
+  const deadline = Date.now() + 86_400_000;
+  const task = await request('/tasks', { familyId: 'weekly', fromUserId: 'wife', toUserId: 'husband',
+    title: 'Take out recycling', deadline, repeat: { kind: 'weekly' } });
+  await request(`/tasks/${task.objectId}`, { deadline: deadline + 3600_000 });
+  await Promise.all([1, 2].map(() => request(`/tasks/${task.objectId}`, { status: 'done', archived: true })));
+  const rows = await request('/tasks?familyId=weekly&caps=v2');
+  assert.equal(rows.length, 2);
+  const next = rows.find(row => row.objectId !== task.objectId);
+  assert.equal(next.deadline, deadline + 7 * 86_400_000);
+  assert.equal(next.repeat.seriesId, task.repeat.seriesId);
+  assert.equal(next.status, 'pending');
+  assert.equal(next.recipientSyncedAt, 0);
+});
+
+test('paused occurrences do not advance until resumed; skipping is archived but not counted as completion', async () => {
+  const task = await request('/tasks', { familyId: 'pause-skip', fromUserId: 'wife', toUserId: 'husband',
+    title: 'Replace filter', repeat: { kind: 'afterDone', days: 90 } });
+  const route = `/tasks/${task.objectId}/repeat`;
+  const command = (action, userId = 'wife', status = 200) => request(route, { action, userId, familyId: task.familyId }, status);
+  await command('pause', 'husband', 403);
+  assert.equal((await command('pause')).repeat.paused, true);
+  const skipped = await command('skip', 'husband');
+  assert.ok(skipped.repeat.skippedAt > 0);
+  assert.equal(skipped.archived, true);
+  assert.equal(skipped.doneAt, 0);
+  assert.equal((await request('/tasks?familyId=pause-skip&caps=v2')).length, 1);
+  await command('resume');
+  await command('resume', 'wife', 409);
+  const rows = await request('/tasks?familyId=pause-skip&caps=v2');
+  assert.equal(rows.length, 2);
+  const next = rows.find(row => row.repeat.current);
+  assert.equal(next.deadline, skipped.repeat.skippedAt + 90 * 86_400_000);
+  assert.equal(next.repeat.generated, true);
+});
+
+test('calendar months clamp short months and restore the original day; intervals start on completion', () => {
+  const { nextDeadline, parseRule } = require('./recurrence');
+  const jan = Date.parse('2028-01-31T20:00:00+08:00');
+  const feb = Date.parse('2028-02-29T20:00:00+08:00');
+  assert.equal(nextDeadline({ kind: 'monthly', anchorAt: jan, scheduledAt: jan }, jan), feb);
+  assert.equal(nextDeadline({ kind: 'monthly', anchorAt: jan, scheduledAt: feb }, feb), Date.parse('2028-03-31T20:00:00+08:00'));
+  assert.equal(nextDeadline({ kind: 'afterDone', days: 3, scheduledAt: feb, completedAt: jan }, jan), jan + 3 * 86_400_000);
+  assert.equal(parseRule({ kind: 'weekly' }, 0), null);
+  assert.equal(parseRule({ kind: 'afterDone', days: 0 }, 0), null);
+});
+
+test('skipping a live occurrence is safe to retry and removing the successor stops the series', async () => {
+  const task = await request('/tasks', { familyId: 'skip-retry', fromUserId: 'wife', toUserId: 'husband',
+    title: 'Clean', deadline: Date.now() + 86_400_000, repeat: { kind: 'weekly' } });
+  const body = { action: 'skip', familyId: task.familyId, userId: 'husband' };
+  const endpoint = `/tasks/${task.objectId}/repeat`;
+  await request(endpoint, body);
+  await request(endpoint, body, 409);
+  await request(`/tasks/${task.objectId}`, { status: 'done', doneAt: Date.now() });
+  let rows = await request('/tasks?familyId=skip-retry&caps=v2');
+  assert.equal(rows.length, 2);
+  assert.equal(rows.find(row => row.objectId === task.objectId).doneAt, 0);
+  const next = rows.find(row => row.repeat.current);
+  await request(`/tasks/${next.objectId}`, { deleted: true });
+  await request(`/tasks/${next.objectId}`, { status: 'done' });
+  rows = await request('/tasks?familyId=skip-retry&caps=v2');
+  assert.equal(rows.length, 2);
+  assert.equal(rows.some(row => row.repeat.current), false);
+});

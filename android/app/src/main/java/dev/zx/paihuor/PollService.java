@@ -65,7 +65,7 @@ public final class PollService extends Service {
                     if (item.recipientSyncedAt == 0 && acks.length() < 100
                             && item.objectId.matches("(?i)[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}")) acks.put(item.objectId);
                     if (item.updatedAt > previous && item.recipientSyncedAt == 0
-                            && "pending".equals(item.status) && !item.archived) {
+                            && "pending".equals(item.status) && !item.archived && !item.repeatGenerated) {
                         String title = item.title.isEmpty() ? item.rawText : item.title;
                         ((NotificationManager) getSystemService(NOTIFICATION_SERVICE))
                                 .notify(item.objectId.hashCode(), notification(TASK_CHANNEL,

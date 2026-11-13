@@ -407,14 +407,28 @@ public final class MainActivity extends Activity implements TaskAdapter.Listener
         PopupMenu menu = new PopupMenu(this, anchor);
         menu.getMenu().add("家庭设置");
         menu.getMenu().add("立即同步");
+        menu.getMenu().add("复制上次");
         menu.setOnMenuItemClickListener(item -> {
-            if ("家庭设置".contentEquals(item.getTitle())) showPairing(); else syncNow(true);
+            if ("家庭设置".contentEquals(item.getTitle())) showPairing();
+            else if ("复制上次".contentEquals(item.getTitle())) copyLast();
+            else syncNow(true);
             return true;
         });
         menu.show();
     }
 
+    private void copyLast() {
+        TaskItem last = TaskCache.load(this).stream().filter(task -> !task.deleted && !task.queued && !task.repeatGenerated
+                && task.familyId.equals(Profile.familyId(this)) && task.fromUserId.equals(Profile.userId(this)))
+                .max(java.util.Comparator.comparingLong(task -> task.createdAt)).orElse(null);
+        if (last == null) toast("还没有派出的任务"); else showCreateDialog(last);
+    }
+
     private void showCreateDialog() {
+        showCreateDialog(null);
+    }
+
+    private void showCreateDialog(TaskItem copied) {
         pendingImages.clear();
         draftDeadline = 0;
         LinearLayout form = new LinearLayout(this);
@@ -441,9 +455,11 @@ public final class MainActivity extends Activity implements TaskAdapter.Listener
         voiceMessage.setVisibility(View.GONE);
         form.addView(voiceMessage, matchWrap());
         EditText title = input("要做什么？");
+        if (copied != null) title.setText(copied.title.isEmpty() ? copied.rawText : copied.title);
         LinearLayout.LayoutParams titleParams = match(dp(56)); titleParams.topMargin = dp(18);
         form.addView(title, titleParams);
         EditText detail = input("补充细节（可选）");
+        if (copied != null) detail.setText(copied.detail);
         LinearLayout.LayoutParams detailParams = match(dp(70)); detailParams.topMargin = dp(10);
         form.addView(detail, detailParams);
 
@@ -459,6 +475,35 @@ public final class MainActivity extends Activity implements TaskAdapter.Listener
                 else { draftDeadline = 0; updateDraftDeadline(deadline); }
             }).show();
         });
+
+        String[] repeatKind = {""};
+        int[] repeatDays = {7};
+        Button repeat = new Button(this);
+        repeat.setText("重复：不重复");
+        repeat.setOnClickListener(view -> new AlertDialog.Builder(this).setTitle("重复规则")
+                .setItems(new String[]{"不重复", "每周", "每月", "完成后隔 N 天"}, (rules, index) -> {
+                    if (index == 3) {
+                        EditText days = input("1–365 天");
+                        days.setInputType(InputType.TYPE_CLASS_NUMBER);
+                        days.setText(String.valueOf(repeatDays[0]));
+                        AlertDialog dialog = new AlertDialog.Builder(this).setTitle("完成后隔几天")
+                                .setView(days).setNegativeButton("取消", null).setPositiveButton("确定", null).show();
+                        dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(confirm -> {
+                            int value;
+                            try { value = Integer.parseInt(days.getText().toString()); }
+                            catch (NumberFormatException ignored) { value = 0; }
+                            if (value < 1 || value > 365) { days.setError("请输入 1 到 365"); return; }
+                            repeatKind[0] = "afterDone";
+                            repeatDays[0] = value;
+                            repeat.setText("重复：" + TaskRepository.repeatLabel(repeatKind[0], value));
+                            dialog.dismiss();
+                        });
+                    } else {
+                        repeatKind[0] = new String[]{"", "weekly", "monthly"}[index];
+                        repeat.setText("重复：" + TaskRepository.repeatLabel(repeatKind[0], repeatDays[0]));
+                    }
+                }).show());
+        form.addView(repeat, match(dp(46)));
 
         LinearLayout imageHeader = new LinearLayout(this);
         imageHeader.setGravity(Gravity.CENTER_VERTICAL);
@@ -496,9 +541,13 @@ public final class MainActivity extends Activity implements TaskAdapter.Listener
         send.setOnClickListener(view -> {
             String value = title.getText().toString().trim();
             if (value.isEmpty()) { title.setError("请输入任务"); return; }
+            if ((repeatKind[0].equals("weekly") || repeatKind[0].equals("monthly")) && draftDeadline <= System.currentTimeMillis()) {
+                toast("请为第一次设定未来的截止时间");
+                return;
+            }
             send.setEnabled(false);
             record.setEnabled(false);
-            createTask(value, detail.getText().toString().trim(), voice.transcript, draftDeadline,
+            createTask(value, detail.getText().toString().trim(), voice.transcript, draftDeadline, repeatKind[0], repeatDays[0],
                     new ArrayList<>(pendingImages), dialog);
         });
         dialog.show();
@@ -660,7 +709,7 @@ public final class MainActivity extends Activity implements TaskAdapter.Listener
         }
     }
 
-    private void createTask(String title, String detail, String transcript, long deadline,
+    private void createTask(String title, String detail, String transcript, long deadline, String repeatKind, int repeatDays,
                             List<PendingImage> images, AlertDialog dialog) {
         String family = Profile.familyId(this), role = Profile.userId(this), peer = Profile.counterpart(this);
         new Thread(() -> {
@@ -677,6 +726,8 @@ public final class MainActivity extends Activity implements TaskAdapter.Listener
                 task.title = title;
                 task.detail = detail;
                 task.deadline = deadline;
+                task.repeatKind = repeatKind;
+                task.repeatDays = repeatDays;
                 task.status = "pending";
                 for (PendingImage pending : images) {
                     TaskItem.TaskImage image = new TaskItem.TaskImage();
@@ -704,15 +755,21 @@ public final class MainActivity extends Activity implements TaskAdapter.Listener
     }
 
     private void pickDeadline(TextView view) {
+        chooseDeadline(draftDeadline, selected -> {
+            draftDeadline = selected;
+            updateDraftDeadline(view);
+        });
+    }
+
+    private void chooseDeadline(long initial, java.util.function.LongConsumer apply) {
         Calendar calendar = Calendar.getInstance();
-        if (draftDeadline > 0) calendar.setTimeInMillis(draftDeadline);
+        if (initial > 0) calendar.setTimeInMillis(initial);
         DatePickerDialog date = new DatePickerDialog(this, (picker, year, month, day) -> {
             TimePickerDialog time = new TimePickerDialog(this, (timePicker, hour, minute) -> {
                 Calendar result = Calendar.getInstance();
                 result.clear();
                 result.set(year, month, day, hour, minute, 0);
-                draftDeadline = result.getTimeInMillis();
-                updateDraftDeadline(view);
+                apply.accept(result.getTimeInMillis());
             }, calendar.get(Calendar.HOUR_OF_DAY), calendar.get(Calendar.MINUTE), true);
             time.show();
         }, calendar.get(Calendar.YEAR), calendar.get(Calendar.MONTH), calendar.get(Calendar.DAY_OF_MONTH));
@@ -855,13 +912,33 @@ public final class MainActivity extends Activity implements TaskAdapter.Listener
             content.addView(deadline);
         }
         if (!item.images.isEmpty()) content.addView(detailImages(item));
-        TextView status = label("状态  " + item.status, 15, SECONDARY, false);
+        String statusLabel = item.skippedAt > 0 ? "已跳过" : "done".equals(item.status) ? "已完成"
+                : "received".equals(item.status) ? "已接下" : "negotiating".equals(item.status) ? "商量中" : "待接下";
+        TextView status = label("状态  " + statusLabel, 15, SECONDARY, false);
         status.setPadding(0, dp(16), 0, dp(8));
         content.addView(status);
 
+        ScrollView scroll = new ScrollView(this);
+        scroll.addView(content);
+        AlertDialog dialog = bottomDialog(scroll);
+        if (!item.repeatKind.isEmpty()) {
+            Button rule = new Button(this);
+            rule.setText("重复：" + TaskRepository.repeatLabel(item.repeatKind, item.repeatDays)
+                    + (item.repeatCurrent && item.repeatPaused ? "（已暂停）" : ""));
+            rule.setEnabled(item.repeatCurrent && (!"done".equals(item.status) || item.fromUserId.equals(Profile.userId(this))));
+            rule.setOnClickListener(view -> showRepeatActions(item, dialog));
+            content.addView(rule, match(dp(48)));
+        }
+        Button copy = new Button(this);
+        copy.setText("复制为新任务");
+        copy.setOnClickListener(view -> { dialog.dismiss(); showCreateDialog(item); });
+        content.addView(copy, match(dp(48)));
+
         LinearLayout actions = new LinearLayout(this);
         actions.setGravity(Gravity.CENTER_VERTICAL);
-        if (item.archived) {
+        if (item.skippedAt > 0) {
+            // Skipped occurrences remain in history and cannot be reopened.
+        } else if (item.archived) {
             actions.addView(actionButton("取消归档", () -> patchTask(item, json("archived", false))));
         } else if ("done".equals(item.status)) {
             actions.addView(actionButton("归档", () -> patchTask(item, json("archived", true))));
@@ -883,9 +960,28 @@ public final class MainActivity extends Activity implements TaskAdapter.Listener
         LinearLayout.LayoutParams actionParams = matchWrap();
         actionParams.topMargin = dp(12);
         content.addView(actions, actionParams);
-        AlertDialog dialog = bottomDialog(content);
         dialog.show();
         styleBottom(dialog);
+    }
+
+    private void showRepeatActions(TaskItem item, AlertDialog detail) {
+        List<String> labels = new ArrayList<>(), actions = new ArrayList<>();
+        if (!"done".equals(item.status)) { labels.add("跳过本次"); actions.add("skip"); }
+        if (item.fromUserId.equals(Profile.userId(this))) {
+            labels.add(item.repeatPaused ? "恢复重复" : "暂停重复");
+            actions.add(item.repeatPaused ? "resume" : "pause");
+        }
+        if (labels.isEmpty()) return;
+        new AlertDialog.Builder(this).setTitle("重复任务").setItems(labels.toArray(new String[0]), (menu, i) -> {
+            String action = actions.get(i);
+            new AlertDialog.Builder(this).setMessage(labels.get(i) + "？")
+                    .setNegativeButton("取消", null).setPositiveButton("确定", (confirm, which) -> new Thread(() -> {
+                        try {
+                            TaskCache.upsert(this, relay.repeatAction(item, Profile.userId(this), action));
+                            runOnUiThread(() -> { detail.dismiss(); refreshList(); syncNow(false); });
+                        } catch (Exception error) { runOnUiThread(() -> toast("更新重复任务失败，请同步后重试")); }
+                    }).start()).show();
+        }).show();
     }
 
     private View detailImages(TaskItem item) {
@@ -946,6 +1042,14 @@ public final class MainActivity extends Activity implements TaskAdapter.Listener
         detail.setText(item.detail);
         LinearLayout.LayoutParams detailParams = match(dp(70)); detailParams.topMargin = dp(10);
         form.addView(detail, detailParams);
+        long[] deadline = { item.deadline };
+        Button due = new Button(this);
+        due.setText(editDeadlineLabel(deadline[0]));
+        due.setOnClickListener(view -> new AlertDialog.Builder(this).setItems(new String[]{"选择时间", "清除时间"}, (menu, choice) -> {
+            if (choice == 0) chooseDeadline(deadline[0], selected -> { deadline[0] = selected; due.setText(editDeadlineLabel(selected)); });
+            else { deadline[0] = 0; due.setText(editDeadlineLabel(0)); }
+        }).show());
+        form.addView(due, match(dp(48)));
         Button save = new Button(this);
         save.setText("保存");
         save.setTextColor(Color.WHITE);
@@ -957,11 +1061,15 @@ public final class MainActivity extends Activity implements TaskAdapter.Listener
             String value = title.getText().toString().trim();
             if (value.isEmpty()) { title.setError("请输入任务"); return; }
             patchTask(item, json("title", value, "rawText", value,
-                    "detail", detail.getText().toString().trim()));
+                    "detail", detail.getText().toString().trim(), "deadline", deadline[0]));
             dialog.dismiss();
         });
         dialog.show();
         styleBottom(dialog);
+    }
+
+    private String editDeadlineLabel(long time) {
+        return "本次截止：" + (time == 0 ? "未设置" : new SimpleDateFormat("MM月dd日 HH:mm", Locale.CHINA).format(new Date(time)));
     }
 
     private void patchTask(TaskItem item, JSONObject patch) {

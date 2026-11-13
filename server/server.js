@@ -14,6 +14,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { DatabaseSync } = require('node:sqlite');
+const { parseRule, nextDeadline } = require('./recurrence');
 
 const PORT = process.env.PORT || 8787;
 const SECRET = process.env.PAIHUOR_KEY || 'CHANGE_ME';
@@ -81,6 +82,11 @@ db.exec(`
     platform TEXT NOT NULL, syncedAt INTEGER NOT NULL
   );
   CREATE INDEX IF NOT EXISTS idx_profile_presence ON profile_presence(familyId, userId);
+  CREATE TABLE IF NOT EXISTS repeat_series (
+    id TEXT PRIMARY KEY, kind TEXT NOT NULL, days INTEGER NOT NULL, anchorAt INTEGER NOT NULL,
+    currentId TEXT NOT NULL, paused INTEGER NOT NULL DEFAULT 0, stopped INTEGER NOT NULL DEFAULT 0,
+    completedAt INTEGER NOT NULL DEFAULT 0, skippedAt INTEGER NOT NULL DEFAULT 0
+  );
   CREATE TABLE IF NOT EXISTS attachments (
     id        TEXT PRIMARY KEY,
     familyId  TEXT DEFAULT '',
@@ -94,7 +100,7 @@ db.exec(`
 `);
 
 // 旧库补列(幂等; 列已存在则 ALTER 抛错被忽略)。对齐 iOS 契约的审计字段。
-["archivedAt INTEGER DEFAULT 0", "archivedBy TEXT DEFAULT ''", "deletedAt INTEGER DEFAULT 0", "deletedBy TEXT DEFAULT ''", "images TEXT DEFAULT '[]'", "recipientSyncedAt INTEGER DEFAULT 0"].forEach((col) => {
+["archivedAt INTEGER DEFAULT 0", "archivedBy TEXT DEFAULT ''", "deletedAt INTEGER DEFAULT 0", "deletedBy TEXT DEFAULT ''", "images TEXT DEFAULT '[]'", "recipientSyncedAt INTEGER DEFAULT 0", "seriesId TEXT DEFAULT ''", "scheduledAt INTEGER DEFAULT 0", "skippedAt INTEGER DEFAULT 0", "repeatGenerated INTEGER DEFAULT 0"].forEach((col) => {
   try { db.exec('ALTER TABLE tasks ADD COLUMN ' + col); } catch (e) {}
 });
 
@@ -129,7 +135,7 @@ function rowToTask(r) {
   try { reminder = JSON.parse(r.reminder || '{}'); } catch (e) {}
   try { negotiation = JSON.parse(r.negotiation || '[]'); } catch (e) {}
   try { images = normImages(JSON.parse(r.images || '[]')); } catch (e) {}
-  return {
+  const task = {
     objectId: r.objectId, id: r.id || '', familyId: r.familyId,
     fromUserId: r.fromUserId, toUserId: r.toUserId, rawText: r.rawText,
     title: r.title, detail: r.detail, deadline: r.deadline, status: r.status,
@@ -140,6 +146,17 @@ function rowToTask(r) {
     receivedAt: r.receivedAt, doneAt: r.doneAt, recipientSyncedAt: r.recipientSyncedAt || 0,
     createdAt: r.createdAt, updatedAt: r.updatedAt
   };
+  if (r.seriesId) {
+    const series = getSeries(r.seriesId);
+    if (series) task.repeat = { seriesId: series.id, kind: series.kind, days: series.days,
+      paused: !!series.paused, current: series.currentId === r.objectId && !series.stopped,
+      generated: !!r.repeatGenerated, skippedAt: r.skippedAt || 0 };
+  }
+  return task;
+}
+
+function getSeries(id) {
+  return db.prepare('SELECT * FROM repeat_series WHERE id=?').get(id);
 }
 
 const isRole = value => value === 'wife' || value === 'husband';
@@ -172,6 +189,82 @@ function insertTask(t) {
     Number(t.createdAt) || 0, Number(t.updatedAt) || 0,
     Number(t.archivedAt) || 0, t.archivedBy || '', Number(t.deletedAt) || 0, t.deletedBy || ''
   );
+}
+
+function setOccurrence(objectId, seriesId, scheduledAt, generated) {
+  db.prepare('UPDATE tasks SET seriesId=?, scheduledAt=?, repeatGenerated=? WHERE objectId=?')
+    .run(seriesId, scheduledAt, generated ? 1 : 0, objectId);
+}
+
+function transaction(action) {
+  db.exec('BEGIN');
+  try {
+    const result = action();
+    db.exec('COMMIT');
+    return result;
+  } catch (error) {
+    db.exec('ROLLBACK');
+    throw error;
+  }
+}
+
+function advanceSeries(task, series, now) {
+  const occurrence = db.prepare('SELECT scheduledAt FROM tasks WHERE objectId=?').get(task.objectId);
+  const deadline = nextDeadline({ ...series, scheduledAt: occurrence.scheduledAt }, now);
+  const time = nextTaskTime();
+  const id = crypto.randomUUID();
+  insertTask({ objectId: id, id, familyId: task.familyId, fromUserId: task.fromUserId, toUserId: task.toUserId,
+    title: task.title, detail: task.detail, rawText: task.rawText, images: task.images, reminder: task.reminder,
+    deadline, createdAt: time, updatedAt: time, status: 'pending' });
+  setOccurrence(id, series.id, deadline, true);
+  db.prepare('UPDATE repeat_series SET currentId=?, completedAt=0, skippedAt=0 WHERE id=?').run(id, series.id);
+}
+
+function updateOccurrence(id, patch) {
+  const before = getTask(id);
+  if (!before) return null;
+  if (!before.repeat) return patchTask(id, patch);
+  return transaction(() => {
+    const series = getSeries(before.repeat.seriesId);
+    if (before.status === 'done' && patch.status && patch.status !== 'done') delete patch.status;
+    const current = !series.stopped && series.currentId === id;
+    if (before.repeat.skippedAt) {
+      delete patch.status;
+      delete patch.doneAt;
+      if (patch.archived === false || patch.archivedAt === 0) { delete patch.archived; delete patch.archivedAt; }
+    }
+    const updated = patchTask(id, patch);
+    if (current && updated.deleted) {
+      db.prepare('UPDATE repeat_series SET stopped=1 WHERE id=?').run(series.id);
+    } else if (current && before.status !== 'done' && updated.status === 'done') {
+      const now = Date.now();
+      db.prepare('UPDATE repeat_series SET completedAt=? WHERE id=?').run(now, series.id);
+      if (!series.paused) advanceSeries(updated, { ...series, completedAt: now }, now);
+    }
+    return getTask(id);
+  });
+}
+
+function changeRepeat(task, action) {
+  return transaction(() => {
+    const series = getSeries(task.repeat.seriesId);
+    if (!series || series.stopped || series.currentId !== task.objectId || task.deleted) return null;
+    if (action === 'skip' && task.status !== 'done') {
+      const now = Date.now();
+      patchTask(task.objectId, { status: 'done', archived: true });
+      db.prepare('UPDATE tasks SET skippedAt=? WHERE objectId=?').run(now, task.objectId);
+      db.prepare('UPDATE repeat_series SET skippedAt=? WHERE id=?').run(now, series.id);
+      if (!series.paused) advanceSeries(task, { ...series, skippedAt: now }, now);
+    } else if (action === 'pause' && !series.paused) {
+      db.prepare('UPDATE repeat_series SET paused=1 WHERE id=?').run(series.id);
+      patchTask(task.objectId, {});
+    } else if (action === 'resume' && series.paused) {
+      db.prepare('UPDATE repeat_series SET paused=0 WHERE id=?').run(series.id);
+      patchTask(task.objectId, {});
+      if (task.status === 'done') advanceSeries(task, series, Date.now());
+    }
+    return getTask(task.objectId);
+  });
 }
 
 function normalizeAuditFlags(patch) {
@@ -572,6 +665,10 @@ const server = http.createServer(async (req, res) => {
         return task ? send(res, 200, task) : send(res, 410, { error: 'task no longer exists' });
       }
     }
+    const rule = t.repeat === undefined ? null : parseRule(t.repeat, t.deadline ?? 0);
+    if (t.repeat !== undefined && (!rule || !isFamily(t.familyId) || !isRole(t.fromUserId) || !isRole(t.toUserId) || t.fromUserId === t.toUserId)) {
+      return send(res, 400, { error: 'invalid repeat rule' });
+    }
     const now = nextTaskTime();
     t.objectId = crypto.randomUUID();
     t.createdAt = now; t.updatedAt = now;
@@ -579,6 +676,12 @@ const server = http.createServer(async (req, res) => {
     db.exec('BEGIN');
     try {
       insertTask(t);
+      if (rule) {
+        const series = crypto.randomUUID();
+        db.prepare('INSERT INTO repeat_series (id,kind,days,anchorAt,currentId) VALUES (?,?,?,?,?)')
+          .run(series, rule.kind, rule.days, t.deadline || 0, t.objectId);
+        setOccurrence(t.objectId, series, t.deadline || 0, false);
+      }
       if (requestId) db.prepare('INSERT INTO task_creates VALUES (?,?,?,?)').run(t.familyId, t.fromUserId, requestId, t.objectId);
       db.exec('COMMIT');
     } catch (error) {
@@ -622,10 +725,23 @@ const server = http.createServer(async (req, res) => {
       selfPushRegistered: !!push.get(family, user), peerPushRegistered: !!push.get(family, peer) });
   }
 
+  const repeatRoute = /^\/tasks\/([^/]+)\/repeat$/.exec(url.pathname);
+  if (req.method === 'POST' && repeatRoute) {
+    const body = await readBody(req);
+    const task = getTask(decodeURIComponent(repeatRoute[1]));
+    if (!task?.repeat || task.familyId !== body.familyId) return send(res, 404, { error: 'repeat not found' });
+    if (!['pause', 'resume', 'skip'].includes(body.action)) return send(res, 400, { error: 'invalid repeat action' });
+    if (body.userId !== task.fromUserId && !(body.action === 'skip' && body.userId === task.toUserId)) {
+      return send(res, 403, { error: 'not allowed' });
+    }
+    const result = changeRepeat(task, body.action);
+    return result ? send(res, 200, result) : send(res, 409, { error: 'occurrence already advanced' });
+  }
+
   if (req.method === 'POST' && url.pathname.startsWith('/tasks/')) {
     const id = decodeURIComponent(url.pathname.slice('/tasks/'.length));
     const patch = await readBody(req);
-    const updated = patchTask(id, patch);
+    const updated = updateOccurrence(id, patch);
     if (!updated) return send(res, 404, { error: 'not found' });
     return send(res, 200, updated);
   }
@@ -633,14 +749,17 @@ const server = http.createServer(async (req, res) => {
   if (req.method === 'DELETE' && url.pathname.startsWith('/tasks/')) {
     const id = decodeURIComponent(url.pathname.slice('/tasks/'.length));
     if (url.searchParams.get('hard') === '1') {
-      const r = db.prepare('DELETE FROM tasks WHERE objectId=?').run(id);
+      const r = transaction(() => {
+        db.prepare('UPDATE repeat_series SET stopped=1 WHERE currentId=?').run(id);
+        return db.prepare('DELETE FROM tasks WHERE objectId=?').run(id);
+      });
       return send(res, 200, { ok: true, hard: true, removed: r.changes });
     }
     // 软删：置 deleted=1 + 刷新 updatedAt(并自动记 deletedAt)，让另一端轮询到墓碑后本地移除
     const by = url.searchParams.get('by') || '';
     const delPatch = { deleted: true };
     if (by) { delPatch.deletedBy = by; }
-    const updated = patchTask(id, delPatch);
+    const updated = updateOccurrence(id, delPatch);
     if (!updated) return send(res, 404, { error: 'not found' });
     return send(res, 200, updated);
   }

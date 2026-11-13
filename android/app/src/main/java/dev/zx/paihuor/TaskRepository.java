@@ -70,6 +70,15 @@ public final class TaskRepository {
         return item.recipientSyncedAt > 0 ? "对方已同步" : "已发出";
     }
 
+    public static String repeatLabel(String kind, int days) {
+        switch (kind) {
+            case "weekly": return "每周";
+            case "monthly": return "每月";
+            case "afterDone": return "完成后隔 " + days + " 天";
+            default: return "不重复";
+        }
+    }
+
     public static void advance(TaskItem item, long now) {
         if ("received".equals(item.status)) {
             item.status = "done";

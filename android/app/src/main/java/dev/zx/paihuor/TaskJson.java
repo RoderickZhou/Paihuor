@@ -25,6 +25,15 @@ public final class TaskJson {
         item.recipientSyncedAt = value.optLong("recipientSyncedAt");
         item.clientRequestId = value.optString("clientRequestId");
         item.queued = value.optBoolean("queued");
+        JSONObject repeat = value.optJSONObject("repeat");
+        if (repeat != null) {
+            item.repeatKind = repeat.optString("kind");
+            item.repeatDays = repeat.optInt("days");
+            item.repeatPaused = repeat.optBoolean("paused");
+            item.repeatCurrent = repeat.optBoolean("current");
+            item.repeatGenerated = repeat.optBoolean("generated");
+            item.skippedAt = repeat.optLong("skippedAt");
+        }
         item.doneAt = value.optLong("doneAt");
 
         JSONArray messages = value.optJSONArray("negotiation");
@@ -79,6 +88,9 @@ public final class TaskJson {
         value.put("recipientSyncedAt", item.recipientSyncedAt);
         if (!item.clientRequestId.isEmpty()) value.put("clientRequestId", item.clientRequestId);
         if (item.queued) value.put("queued", true);
+        if (!item.repeatKind.isEmpty()) value.put("repeat", new JSONObject().put("kind", item.repeatKind)
+                .put("days", item.repeatDays).put("paused", item.repeatPaused).put("current", item.repeatCurrent)
+                .put("generated", item.repeatGenerated).put("skippedAt", item.skippedAt));
         value.put("doneAt", item.doneAt);
 
         JSONArray messages = new JSONArray();

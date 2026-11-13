@@ -21,6 +21,12 @@ public final class TaskItem {
     public long recipientSyncedAt;
     public String clientRequestId = "";
     public boolean queued;
+    public String repeatKind = "";
+    public int repeatDays;
+    public boolean repeatPaused;
+    public boolean repeatCurrent;
+    public boolean repeatGenerated;
+    public long skippedAt;
     public long doneAt;
     public final List<Negotiation> negotiation = new ArrayList<>();
     public final List<TaskImage> images = new ArrayList<>();

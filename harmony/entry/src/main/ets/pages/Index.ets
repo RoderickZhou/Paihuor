@@ -3,7 +3,7 @@ import { image } from '@kit.ImageKit';
 import { util } from '@kit.ArkTS';
 import { scanBarcode, scanCore } from '@kit.ScanKit';
 import { Constants } from '../constants/Constants';
-import { TaskItem, TaskStatus, ReminderConfig, NegotiationMsg, TaskImage } from '../models/TaskModels';
+import { TaskItem, TaskStatus, ReminderConfig, NegotiationMsg, TaskImage, RepeatRule } from '../models/TaskModels';
 import { TaskStore } from '../services/TaskStore';
 import { AsrService } from '../services/AsrService';
 import { AIService } from '../services/AIService';
@@ -26,6 +26,8 @@ struct Index {
   @State draftTitle: string = '';
   @State draftDeadline: number = 0;
   @State draftDetail: string = '';
+  @State draftRepeatKind: string = '';
+  @State draftRepeatDays: string = '7';
   @State recording: boolean = false;
   @State transcribing: boolean = false;
   @State asrText: string = '';
@@ -282,7 +284,7 @@ struct Index {
     return t.toUserId === this.myUserId
       && t.status === TaskStatus.PENDING
       && !t.archived
-      && !t.deleted;
+      && !t.deleted && !t.repeat?.generated;
   }
 
   private canNotifyOnThisPoll(t: TaskItem): boolean {
@@ -895,9 +897,14 @@ struct Index {
 
       Scroll() {
       Column() {
-        Text('派一件活')
-          .fontSize(18).fontWeight(FontWeight.Bold)
-          .fontColor(Constants.COLOR_TEXT_PRIMARY).margin({ bottom: 8 })
+        Row() {
+          Text('派一件活').fontSize(18).fontWeight(FontWeight.Bold).fontColor(Constants.COLOR_TEXT_PRIMARY)
+          Blank()
+          Button('复制上次').height(36).fontSize(13).fontColor(Constants.COLOR_PRIMARY).backgroundColor(Constants.COLOR_BG)
+            .enabled(!this.recording && !this.transcribing && !this.extracting && !this.savingDraft && !this.uploadingImg)
+            .onClick(() => { this.copyLast(); })
+        }
+        .width('100%').margin({ bottom: 8 })
         Text('接收人：' + this.displayName(this.otherUserId))
           .fontSize(15).fontColor(Constants.COLOR_TEXT_PRIMARY).width('100%').margin({ bottom: 12 })
 
@@ -985,6 +992,33 @@ struct Index {
         }
         .width('100%').margin({ top: 10 })
         .enabled(!this.recording && !this.transcribing && !this.extracting)
+
+        Row() {
+          Text('重复').fontSize(14).fontColor(Constants.COLOR_TEXT_PRIMARY)
+          Blank()
+          Button(this.repeatLabel(this.draftRepeatKind, Number(this.draftRepeatDays)))
+            .height(38).fontSize(14).fontColor(Constants.COLOR_PRIMARY).backgroundColor(Constants.COLOR_BG)
+            .bindMenu([
+              { value: '不重复', action: () => { this.draftRepeatKind = ''; } },
+              { value: '每周', action: () => { this.draftRepeatKind = 'weekly'; } },
+              { value: '每月', action: () => { this.draftRepeatKind = 'monthly'; } },
+              { value: '完成后隔 N 天', action: () => { this.draftRepeatKind = 'afterDone'; } }
+            ])
+        }
+        .width('100%').margin({ top: 10 })
+        .enabled(!this.recording && !this.transcribing && !this.extracting)
+
+        if (this.draftRepeatKind === 'afterDone') {
+          Row({ space: 8 }) {
+            Text('完成后隔').fontSize(14).fontColor(Constants.COLOR_TEXT_PRIMARY)
+            TextInput({ text: this.draftRepeatDays, placeholder: '1–365' })
+              .type(InputType.Number).maxLength(3).width(88).height(42)
+              .fontColor(Constants.COLOR_TEXT_PRIMARY).backgroundColor(Constants.COLOR_BG)
+              .onChange((value: string) => { this.draftRepeatDays = value; })
+            Text('天').fontSize(14).fontColor(Constants.COLOR_TEXT_PRIMARY)
+          }
+          .width('100%').margin({ top: 8 })
+        }
 
         // 图片附件
         Row() {
@@ -1173,6 +1207,8 @@ struct Index {
           .width('100%')
           .margin({ bottom: 18 })
 
+        this.RepeatDetail(item)
+
         if (item.images.length > 0) {
           this.DetailImagesBlock(item)
         }
@@ -1191,6 +1227,37 @@ struct Index {
     }
     .width('100%').height('100%')
     .backgroundColor('#33000000')
+  }
+
+  @Builder
+  RepeatDetail(item: TaskItem) {
+    Column({ space: 8 }) {
+      if (item.repeat) {
+        Text(this.repeatLabel(item.repeat.kind, item.repeat.days) + (item.repeat.current && item.repeat.paused ? ' · 已暂停' : '')
+          + (item.repeat.skippedAt > 0 ? ' · 已跳过' : ''))
+          .fontSize(14).fontColor(Constants.COLOR_TEXT_PRIMARY).width('100%')
+        if (item.repeat.current) {
+          Row({ space: 8 }) {
+            if (item.status !== TaskStatus.DONE) {
+              Button('跳过本次').fontSize(13).height(36).layoutWeight(1)
+                .onClick(() => { this.confirmRepeatAction(item, 'skip', '跳过本次'); })
+            }
+            if (this.isCreator(item)) {
+              Button(item.repeat.paused ? '恢复重复' : '暂停重复').fontSize(13).height(36).layoutWeight(1)
+                .onClick(() => {
+                  const paused = item.repeat?.paused === true;
+                  this.confirmRepeatAction(item, paused ? 'resume' : 'pause', paused ? '恢复重复' : '暂停重复');
+                })
+            }
+          }
+          .width('100%')
+        }
+      }
+      Button('复制为新任务').fontSize(13).height(38).width('100%')
+        .fontColor(Constants.COLOR_PRIMARY).backgroundColor(Constants.COLOR_BG)
+        .onClick(() => { this.copyTask(item); })
+    }
+    .width('100%').margin({ bottom: 10 })
   }
 
   // 详情里显示图片：3 列网格，点图全屏查看。图片随下载逐张出现
@@ -1602,7 +1669,7 @@ struct Index {
           .height(48).backgroundColor(Constants.COLOR_BG).borderRadius(10)
           .onChange((v: string) => { this.editDetail = v; })
 
-        Text('截止时间').fontSize(14).fontColor(Constants.COLOR_TEXT_SECONDARY)
+        Text('本次截止时间').fontSize(14).fontColor(Constants.COLOR_TEXT_SECONDARY)
           .width('100%').margin({ top: 14, bottom: 8 })
         Row() {
           this.EditTimeChip('2分钟后', 2)
@@ -1611,10 +1678,14 @@ struct Index {
           this.EditTimeChip('清除', 0)
         }
         .width('100%').justifyContent(FlexAlign.SpaceBetween)
-        Text(this.editDeadline > 0 ? ('截止：' + Constants.formatDeadline(this.editDeadline)) : '未设时间')
-          .fontSize(13)
-          .fontColor(this.editDeadline > 0 ? Constants.COLOR_PRIMARY : Constants.COLOR_TEXT_SECONDARY)
-          .width('100%').margin({ top: 10 })
+        Button(this.editDeadline > 0 ? Constants.formatDeadline(this.editDeadline) : '选择时间')
+          .fontSize(13).fontColor(Constants.COLOR_PRIMARY).backgroundColor(Constants.COLOR_BG)
+          .height(42).width('100%').margin({ top: 10 })
+          .onClick(() => {
+            this.getUIContext().showDatePickerDialog({ selected: new Date(this.editDeadline || Date.now()),
+              showTime: true, useMilitaryTime: true,
+              onDateAccept: (value: Date) => { if (this.showEdit) this.editDeadline = value.getTime(); } });
+          })
 
         Row() {
           Button('取消')
@@ -1702,6 +1773,8 @@ struct Index {
     this.draftTitle = '';
     this.draftDeadline = 0;
     this.draftDetail = '';
+    this.draftRepeatKind = '';
+    this.draftRepeatDays = '7';
     this.asrText = '';
     this.draftTranscript = '';
     this.recording = false;
@@ -1711,6 +1784,47 @@ struct Index {
     this.draftThumbs = [];
     this.uploadingImg = false;
     this.showCreate = true;
+  }
+
+  private repeatLabel(kind: string, days: number): string {
+    if (kind === 'weekly') return '每周';
+    if (kind === 'monthly') return '每月';
+    if (kind === 'afterDone') return days > 0 ? '完成后隔 ' + days + ' 天' : '完成后隔 N 天';
+    return '不重复';
+  }
+
+  private copyTask(item: TaskItem): void {
+    this.closeDetail();
+    this.openCreate();
+    this.draftTitle = this.taskDisplayTitle(item);
+    this.draftDetail = item.detail;
+  }
+
+  private copyLast(): void {
+    const last = TaskStore.getInstance().getAll().find((t: TaskItem) => t.familyId === this.familyId
+      && this.isCreator(t) && !t.deleted && !this.isQueued(t) && !t.repeat?.generated);
+    if (last) this.copyTask(last);
+    else this.toast('还没有派出的任务');
+  }
+
+  private confirmRepeatAction(item: TaskItem, action: string, label: string): void {
+    this.getUIContext().showAlertDialog({ title: label + '？', message: this.taskDisplayTitle(item),
+      primaryButton: { value: '确定', action: () => { this.applyRepeatAction(item, action); } },
+      secondaryButton: { value: '取消', action: () => {} } });
+  }
+
+  private async applyRepeatAction(item: TaskItem, action: string): Promise<void> {
+    const saved = await RelayService.getInstance().repeatAction(item, this.myUserId, action);
+    if (!saved) { this.toast('更新重复任务失败，请同步后重试'); return; }
+    try {
+      const orphan = await TaskStore.getInstance().mergeRemote([saved]);
+      await ReminderService.getInstance().cancelForTask(orphan);
+      this.closeDetail();
+      this.refresh();
+      this.poll();
+    } catch (err) {
+      this.toast('操作已提交，请刷新任务');
+    }
   }
 
   private pickDraftDeadline(): void {
@@ -1854,6 +1968,15 @@ struct Index {
       this.toast('说点什么吧');
       return;
     }
+    const repeatDays = Number(this.draftRepeatDays);
+    if ((this.draftRepeatKind === 'weekly' || this.draftRepeatKind === 'monthly') && this.draftDeadline <= Date.now()) {
+      this.toast('请为第一次设定未来的截止时间');
+      return;
+    }
+    if (this.draftRepeatKind === 'afterDone' && (!Number.isInteger(repeatDays) || repeatDays < 1 || repeatDays > 365)) {
+      this.toast('请输入 1 到 365 天');
+      return;
+    }
     const t = new TaskItem();
     t.id = util.generateRandomUUID();
     t.clientRequestId = t.id;
@@ -1864,6 +1987,11 @@ struct Index {
     t.title = this.draftTitle.trim();
     t.detail = this.draftDetail;
     t.deadline = this.draftDeadline;
+    if (this.draftRepeatKind.length > 0) {
+      t.repeat = new RepeatRule();
+      t.repeat.kind = this.draftRepeatKind;
+      t.repeat.days = this.draftRepeatKind === 'afterDone' ? repeatDays : 0;
+    }
     t.status = TaskStatus.PENDING;
     t.reminder = new ReminderConfig();
     t.images = this.draftImages.slice();
@@ -2039,6 +2167,15 @@ struct Index {
   }
 
   async onDone(item: TaskItem): Promise<void> {
+    if (item.repeat && item.objectId.length > 0) {
+      const updated = await RelayService.getInstance().update(item.objectId,
+        { 'status': TaskStatus.DONE, 'doneAt': Date.now(), 'archived': true });
+      if (!updated) { this.toast('完成未同步，请联网后重试'); return; }
+      await ReminderService.getInstance().cancelForTask(item.reminderIds);
+      await this.poll();
+      this.toast('已完成并归档');
+      return;
+    }
     await ReminderService.getInstance().cancelForTask(item.reminderIds);
     item.reminderIds = [];
     item.status = TaskStatus.DONE;
@@ -2115,8 +2252,10 @@ struct Index {
   }
 
   private directionLabel(item: TaskItem): string {
-    let st = this.statusLabel(item.status);
-    const img = item.images.length > 0 ? (' · 📷' + item.images.length) : '';
+    let st = item.repeat?.skippedAt ? '已跳过' : this.statusLabel(item.status);
+    const img = (item.images.length > 0 ? (' · 📷' + item.images.length) : '')
+      + (item.repeat ? (' · ' + this.repeatLabel(item.repeat.kind, item.repeat.days)
+        + (item.repeat.current && item.repeat.paused ? '（已暂停）' : '')) : '');
     if (this.isReceiver(item)) {
       return '来自 ' + this.displayName(item.fromUserId) + ' · ' + st + img;
     }

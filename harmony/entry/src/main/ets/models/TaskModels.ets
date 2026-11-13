@@ -31,6 +31,15 @@ export class TaskImage {
   size: number = 0;                 // 字节数
 }
 
+export class RepeatRule {
+  kind: string = '';
+  days: number = 0;
+  paused: boolean = false;
+  current: boolean = false;
+  generated: boolean = false;
+  skippedAt: number = 0;
+}
+
 // 一条待办
 export class TaskItem {
   id: string = '';
@@ -58,5 +67,6 @@ export class TaskItem {
   receivedAt: number = 0;
   recipientSyncedAt: number = 0;
   clientRequestId: string = '';
+  repeat?: RepeatRule;
   doneAt: number = 0;
 }

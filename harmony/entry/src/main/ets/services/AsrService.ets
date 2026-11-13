@@ -14,6 +14,10 @@ export class AsrService {
   private listening: boolean = false;
   private latestText: string = '';
   private pending: Uint8Array = new Uint8Array(0);
+  private operations: Promise<void> = Promise.resolve();
+  private engineReady: Promise<void> | null = null;
+  private capturing: boolean = false;
+  private sessionSequence: number = 0;
 
   private onPartial: ((t: string) => void) | null = null;
   private onFinal: ((t: string) => void) | null = null;
@@ -29,9 +33,20 @@ export class AsrService {
   // 预热：提前创建识别引擎，避免首次"按住说话"加载卡顿
   async prewarm(): Promise<void> {
     try {
-      await this.ensureEngine();
+      await this.prepareEngine();
     } catch (err) {
       hilog.warn(0x0000, TAG, 'prewarm failed: ' + JSON.stringify(err));
+    }
+  }
+
+  private async prepareEngine(): Promise<void> {
+    if (!this.engineReady) {
+      this.engineReady = this.ensureEngine();
+    }
+    try {
+      await this.engineReady;
+    } finally {
+      this.engineReady = null;
     }
   }
 
@@ -54,19 +69,26 @@ export class AsrService {
         hilog.info(0x0000, TAG, 'onEvent ' + eventCode);
       },
       onResult: (sessionId: string, result: speechRecognizer.SpeechRecognitionResult) => {
+        if (sessionId !== this.sessionId) return;
         this.latestText = result.result;
         if (this.onPartial) {
           this.onPartial(result.result);
         }
       },
       onComplete: (sessionId: string, eventMessage: string) => {
+        if (sessionId !== this.sessionId) return;
+        this.sessionId = '';
         this.listening = false;
+        this.enqueue(() => this.stopCapture());
         if (this.onFinal) {
           this.onFinal(this.latestText);
         }
       },
       onError: (sessionId: string, errorCode: number, errorMessage: string) => {
+        if (sessionId !== this.sessionId) return;
+        this.sessionId = '';
         this.listening = false;
+        this.enqueue(() => this.stopCapture());
         if (this.onErr) {
           this.onErr('ASR ' + errorCode + ': ' + errorMessage);
         }
@@ -121,12 +143,17 @@ export class AsrService {
     this.pending = merged.slice(offset);
   }
 
-  async start(onPartial: (t: string) => void, onFinal: (t: string) => void, onErr: (m: string) => void): Promise<void> {
+  start(onPartial: (t: string) => void, onFinal: (t: string) => void, onErr: (m: string) => void): Promise<void> {
+    return this.enqueue(() => this.startSession(onPartial, onFinal, onErr));
+  }
+
+  private async startSession(onPartial: (t: string) => void, onFinal: (t: string) => void,
+    onErr: (m: string) => void): Promise<void> {
     this.onPartial = onPartial;
     this.onFinal = onFinal;
     this.onErr = onErr;
 
-    await this.ensureEngine();
+    await this.prepareEngine();
     await this.ensureCapturer();
 
     const engine = this.engine;
@@ -138,7 +165,7 @@ export class AsrService {
 
     this.latestText = '';
     this.pending = new Uint8Array(0);
-    this.sessionId = 'sess-' + Date.now();
+    this.sessionId = 'sess-' + Date.now() + '-' + (++this.sessionSequence);
     this.listening = true;
 
     const startParams: speechRecognizer.StartParams = {
@@ -146,29 +173,50 @@ export class AsrService {
       audioInfo: { audioType: 'pcm', sampleRate: 16000, soundChannel: 1, sampleBit: 16 }
     };
     engine.startListening(startParams);
-    await capturer.start();
-  }
-
-  async stop(): Promise<void> {
-    if (!this.listening) {
-      return;
-    }
-    this.listening = false;
-    if (this.capturer) {
-      await this.capturer.stop();
-    }
-    if (this.engine) {
-      this.engine.finish(this.sessionId);
+    try {
+      await capturer.start();
+      this.capturing = true;
+    } catch (err) {
+      await this.cancelSession();
+      throw new Error('无法开始录音');
     }
   }
 
-  async cancel(): Promise<void> {
-    this.listening = false;
-    if (this.capturer) {
+  private async stopCapture(): Promise<void> {
+    if (this.capturer && this.capturing) {
+      this.capturing = false;
       await this.capturer.stop();
     }
-    if (this.engine) {
-      this.engine.cancel(this.sessionId);
+  }
+
+  private enqueue(action: () => Promise<void>): Promise<void> {
+    const next = this.operations.then(action);
+    this.operations = next.catch(() => {});
+    return next;
+  }
+
+  stop(): Promise<void> {
+    return this.enqueue(async () => {
+      if (!this.listening) return;
+      this.listening = false;
+      const id = this.sessionId;
+      await this.stopCapture();
+      if (this.engine && id === this.sessionId) this.engine.finish(id);
+    });
+  }
+
+  cancel(): Promise<void> {
+    return this.enqueue(() => this.cancelSession());
+  }
+
+  private async cancelSession(): Promise<void> {
+    const id = this.sessionId;
+    this.sessionId = '';
+    this.listening = false;
+    try {
+      await this.stopCapture();
+    } finally {
+      if (this.engine && id.length > 0) this.engine.cancel(id);
     }
   }
 }

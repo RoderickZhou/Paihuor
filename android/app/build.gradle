@@ -1,0 +1,65 @@
+plugins {
+    id "com.android.application"
+}
+
+android {
+    namespace "dev.zx.paihuor"
+    compileSdk 35
+
+    defaultConfig {
+        applicationId "dev.zx.paihuor"
+        minSdk 26
+        targetSdk 34
+        versionCode 3
+        versionName "2.1.0"
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro"
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+def voiceModelName = "vosk-model-small-cn-0.22.zip"
+def voiceModelAssets = layout.buildDirectory.dir("generated/voiceAssets")
+def localVoiceModel = providers.gradleProperty("voiceModelZip")
+tasks.register("prepareVoiceModel") {
+    inputs.property("model", voiceModelName)
+    if (localVoiceModel.isPresent()) inputs.file(localVoiceModel.get())
+    outputs.file(voiceModelAssets.map { it.file(voiceModelName) })
+    doLast {
+        def target = voiceModelAssets.get().file(voiceModelName).asFile
+        target.parentFile.mkdirs()
+        def staged = new File(temporaryDir, voiceModelName)
+        if (localVoiceModel.isPresent()) {
+            staged.bytes = file(localVoiceModel.get()).bytes
+        } else {
+            def connection = new URI("https://alphacephei.com/vosk/models/${voiceModelName}").toURL().openConnection()
+            connection.connectTimeout = 20000
+            connection.readTimeout = 60000
+            connection.inputStream.withCloseable { input -> staged.withOutputStream { it << input } }
+        }
+        def digest = java.security.MessageDigest.getInstance("SHA-256")
+        staged.eachByte(65536) { bytes, count -> digest.update(bytes, 0, count) }
+        if (digest.digest().encodeHex().toString() != "3af8b0e7e0f835ae9d414ce5df580237a3cfb08d586c9fbbb0f7ff29ad5b14ba") {
+            throw new GradleException("Unexpected Mandarin speech model checksum")
+        }
+        java.nio.file.Files.copy(staged.toPath(), target.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+    }
+}
+android.sourceSets.main.assets.srcDir(voiceModelAssets)
+tasks.named("preBuild").configure { dependsOn("prepareVoiceModel") }
+
+dependencies {
+    implementation "com.alphacephei:vosk-android:0.3.75"
+    testImplementation "junit:junit:4.13.2"
+    testImplementation "org.json:json:20240303"
+}

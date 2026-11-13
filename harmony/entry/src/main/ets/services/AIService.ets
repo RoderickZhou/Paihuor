@@ -1,7 +1,6 @@
 import { http } from '@kit.NetworkKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { AppConfig } from '../config/AppConfig';
-import { Constants } from '../constants/Constants';
 
 const TAG = 'AIService';
 
@@ -145,7 +144,6 @@ export class AIService {
         hasDeadline: raw.hasDeadline === true,
         deadline: deadlineMs
       };
-      hilog.info(0x0000, TAG, 'extract ok: ' + JSON.stringify(result));
       return result;
     } finally {
       client.destroy();
@@ -174,9 +172,7 @@ export class AIService {
 
   // 当前时间，固定 +08:00，如 2026-06-21T15:30:00+08:00
   private static nowIsoCST(): string {
-    const d = new Date();
-    return d.getFullYear() + '-' + Constants.pad2(d.getMonth() + 1) + '-' + Constants.pad2(d.getDate())
-      + 'T' + Constants.pad2(d.getHours()) + ':' + Constants.pad2(d.getMinutes()) + ':' + Constants.pad2(d.getSeconds())
-      + '+08:00';
+    const d = new Date(Date.now() + 8 * 60 * 60 * 1000);
+    return d.toISOString().slice(0, 19) + '+08:00';
   }
 }

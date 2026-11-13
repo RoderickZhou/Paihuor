@@ -10,6 +10,9 @@ harmony/entry/src/main/ets/config/AppConfig.ets
 *.moved-aside
 *.ipa
 server/uploads/
+android/app/src/main/assets/paihuor_config.json
+android/.gradle/
+android/app/build/
 server/paihuor.db
 server/paihuor.db-*
 server/*.db.bak-*

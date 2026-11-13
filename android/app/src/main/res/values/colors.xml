@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="pai_background">#F3F6FF</color>
+    <color name="pai_card">#FFFFFF</color>
+    <color name="pai_primary">#477CFF</color>
+    <color name="pai_primary_light">#DCE6FF</color>
+    <color name="pai_text">#17181C</color>
+    <color name="pai_text_secondary">#9AA2B3</color>
+    <color name="pai_danger">#E84B4B</color>
+</resources>

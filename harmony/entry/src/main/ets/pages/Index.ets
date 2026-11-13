@@ -24,6 +24,7 @@ struct Index {
   @State draftDeadline: number = 0;
   @State draftDetail: string = '';
   @State recording: boolean = false;
+  @State transcribing: boolean = false;
   @State asrText: string = '';
   @State extracting: boolean = false;
   @State recordError: string = '';
@@ -73,6 +74,10 @@ struct Index {
   private sessionStartedAt: number = Date.now();
   private notifiedObjectIds: string[] = [];
   private firstPollDone: boolean = false; // 首轮只建立基线，不弹通知，避免启动刷屏
+  private voiceAttempt: number = 0;
+  private voiceTimer: number = -1;
+  private draftTranscript: string = '';
+  private finalTranscript: string | null = null;
 
   async aboutToAppear(): Promise<void> {
     const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
@@ -105,7 +110,18 @@ struct Index {
   }
 
   aboutToDisappear(): void {
+    this.cancelVoice();
     this.stopPolling();
+  }
+
+  onPageHide(): void {
+    if (this.recording) this.cancelVoice();
+  }
+
+  onBackPress(): boolean {
+    if (!this.showCreate) return false;
+    this.closeCreate();
+    return true;
   }
 
   refresh(): void {
@@ -718,34 +734,38 @@ struct Index {
       // 半透明遮罩占位（点遮罩不关闭，避免误触；用取消按钮关闭）
       Column().layoutWeight(1).width('100%')
 
+      Scroll() {
       Column() {
         Text('派一件活')
           .fontSize(18).fontWeight(FontWeight.Bold)
           .fontColor(Constants.COLOR_TEXT_PRIMARY).margin({ bottom: 16 })
 
         // 第二步：按住说话
-        Button(this.recording ? '🎤 松开结束' : '🎤 按住说话')
+        Button(this.recording ? '松开生成草稿' : (this.transcribing || this.extracting ? '正在生成草稿…' : '按住说话'))
           .type(ButtonType.Capsule)
           .fontSize(16).fontColor(Color.White)
           .backgroundColor(this.recording ? Constants.COLOR_DANGER : Constants.COLOR_PRIMARY)
           .width('100%').height(64)
+          .enabled(!this.transcribing && !this.extracting)
           .gesture(
             LongPressGesture({ repeat: false, duration: 150 })
               .onAction(() => { this.startRecord(); })
               .onActionEnd(() => { this.stopRecord(); })
-              .onActionCancel(() => { this.stopRecord(); })
+              .onActionCancel(() => { if (this.recording) this.cancelVoice(); })
           )
 
         if (this.recording || this.asrText.length > 0) {
           Text(this.asrText.length > 0 ? this.asrText : '请说话…')
             .fontSize(14).fontColor(Constants.COLOR_TEXT_SECONDARY)
+            .maxLines(3).textOverflow({ overflow: TextOverflow.Ellipsis })
             .width('100%').margin({ top: 12 })
         }
 
-        if (this.extracting) {
+        if (this.transcribing || this.extracting) {
           Row() {
             LoadingProgress().width(20).height(20).color(Constants.COLOR_PRIMARY)
-            Text(' AI 识别中…').fontSize(13).fontColor(Constants.COLOR_TEXT_SECONDARY)
+            Text(this.transcribing ? ' 正在转写…' : ' 正在整理草稿…')
+              .fontSize(13).fontColor(Constants.COLOR_TEXT_SECONDARY)
           }
           .margin({ top: 12 })
         }
@@ -764,7 +784,14 @@ struct Index {
           .height(48)
           .backgroundColor(Constants.COLOR_BG)
           .borderRadius(10)
+          .enabled(!this.recording && !this.transcribing && !this.extracting)
           .onChange((v: string) => { this.draftTitle = v; })
+
+        TextArea({ text: this.draftDetail, placeholder: '补充细节（可选）' })
+          .height(68).width('100%').fontSize(14).margin({ top: 8 })
+          .backgroundColor(Constants.COLOR_BG).borderRadius(10)
+          .enabled(!this.recording && !this.transcribing && !this.extracting)
+          .onChange((v: string) => { this.draftDetail = v; })
 
         Text('截止时间')
           .fontSize(14).fontColor(Constants.COLOR_TEXT_SECONDARY)
@@ -778,11 +805,21 @@ struct Index {
         }
         .width('100%')
         .justifyContent(FlexAlign.SpaceBetween)
+        .enabled(!this.recording && !this.transcribing && !this.extracting)
 
-        Text(this.draftDeadline > 0 ? ('截止：' + Constants.formatDeadline(this.draftDeadline)) : '未设时间')
-          .fontSize(13)
-          .fontColor(this.draftDeadline > 0 ? Constants.COLOR_PRIMARY : Constants.COLOR_TEXT_SECONDARY)
-          .width('100%').margin({ top: 10 })
+        Row() {
+          Text(this.draftDeadline > 0 ? ('截止：' + Constants.formatDeadline(this.draftDeadline)) : '未设时间')
+            .fontSize(13)
+            .fontColor(this.draftDeadline > 0 ? Constants.COLOR_PRIMARY : Constants.COLOR_TEXT_SECONDARY)
+          Blank()
+          if (this.draftDeadline > 0) {
+            Button('清除').fontSize(13).height(32)
+              .fontColor(Constants.COLOR_PRIMARY).backgroundColor(Color.Transparent)
+              .onClick(() => { this.draftDeadline = 0; })
+          }
+        }
+        .width('100%').margin({ top: 10 })
+        .enabled(!this.recording && !this.transcribing && !this.extracting)
 
         // 图片附件
         Row() {
@@ -809,11 +846,12 @@ struct Index {
             .type(ButtonType.Normal).fontColor(Constants.COLOR_TEXT_SECONDARY)
             .backgroundColor(Constants.COLOR_BG).layoutWeight(1).height(46)
             .borderRadius(10).margin({ right: 10 })
-            .onClick(() => { this.showCreate = false; })
+            .onClick(() => { this.closeCreate(); })
           Button('发送')
             .type(ButtonType.Normal).fontColor(Color.White)
             .backgroundColor(Constants.COLOR_PRIMARY).layoutWeight(1).height(46)
             .borderRadius(10)
+            .enabled(!this.recording && !this.transcribing && !this.extracting)
             .onClick(() => { this.onSend(); })
         }
         .width('100%')
@@ -823,6 +861,10 @@ struct Index {
       .padding(20)
       .backgroundColor(Constants.COLOR_CARD_BG)
       .borderRadius({ topLeft: 18, topRight: 18 })
+      }
+      .width('100%').constraintSize({ maxHeight: '94%' })
+      .align(Alignment.Bottom)
+      .scrollBar(BarState.Off)
     }
     .width('100%')
     .height('100%')
@@ -1491,10 +1533,12 @@ struct Index {
   }
 
   openCreate(): void {
+    this.cancelVoice();
     this.draftTitle = '';
     this.draftDeadline = 0;
     this.draftDetail = '';
     this.asrText = '';
+    this.draftTranscript = '';
     this.recording = false;
     this.extracting = false;
     this.recordError = '';
@@ -1630,6 +1674,7 @@ struct Index {
   }
 
   async onSend(): Promise<void> {
+    if (this.recording || this.transcribing || this.extracting) return;
     if (this.draftTitle.trim().length === 0) {
       this.toast('说点什么吧');
       return;
@@ -1639,7 +1684,7 @@ struct Index {
     t.familyId = this.familyId;
     t.fromUserId = this.myUserId;
     t.toUserId = this.otherUserId;
-    t.rawText = this.asrText.trim().length > 0 ? this.asrText.trim() : this.draftTitle.trim();
+    t.rawText = this.draftTranscript.length > 0 ? this.draftTranscript : this.draftTitle.trim();
     t.title = this.draftTitle.trim();
     t.detail = this.draftDetail;
     t.deadline = this.draftDeadline;
@@ -1649,7 +1694,7 @@ struct Index {
     t.createdAt = Date.now();
     // 先存本地（离线也能用）
     await TaskStore.getInstance().upsert(t);
-    this.showCreate = false;
+    this.closeCreate();
     this.refresh();
     // 推送到中继做跨设备投递
     const saved = await RelayService.getInstance().create(t);
@@ -2024,54 +2069,114 @@ struct Index {
     this.toast('已保存');
   }
 
+  private closeCreate(): void {
+    this.cancelVoice();
+    this.showCreate = false;
+  }
+
+  private clearVoiceTimer(): void {
+    if (this.voiceTimer < 0) return;
+    clearTimeout(this.voiceTimer);
+    this.voiceTimer = -1;
+  }
+
+  private cancelVoice(): void {
+    this.voiceAttempt++;
+    this.clearVoiceTimer();
+    this.finalTranscript = null;
+    this.recording = false;
+    this.transcribing = false;
+    this.extracting = false;
+    AsrService.getInstance().cancel().catch(() => {});
+  }
+
   async startRecord(): Promise<void> {
-    const ok = await this.ensureMicPermission();
-    if (!ok) {
-      this.toast('需要麦克风权限');
+    if (!this.showCreate || this.recording || this.transcribing || this.extracting) return;
+    const attempt = ++this.voiceAttempt;
+    const atManager = abilityAccessCtrl.createAtManager();
+    const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
+    if (atManager.verifyAccessTokenSync(ctx.applicationInfo.accessTokenId, 'ohos.permission.MICROPHONE') !== 0) {
+      const ok = await this.ensureMicPermission();
+      if (attempt === this.voiceAttempt && this.showCreate) {
+        this.recordError = ok ? '已允许麦克风，请重新按住说话' : '需要麦克风权限，也可手动填写';
+      }
       return;
     }
     this.asrText = '';
+    this.finalTranscript = null;
     this.recordError = '';
     this.recording = true;
-    await AsrService.getInstance().start(
-      (t: string) => { this.asrText = t; },
-      (t: string) => { this.onAsrFinal(t); },
-      (m: string) => { this.recording = false; this.recordError = m; }
-    );
+    this.voiceTimer = setTimeout(() => { this.failVoice(attempt); }, 45000);
+    try {
+      await AsrService.getInstance().start(
+        (t: string) => { if (attempt === this.voiceAttempt) this.asrText = t; },
+        (t: string) => {
+          if (attempt !== this.voiceAttempt) return;
+          if (this.recording) this.finalTranscript = t;
+          else this.onAsrFinal(t, attempt);
+        },
+        (_: string) => { this.failVoice(attempt); }
+      );
+    } catch (err) {
+      this.failVoice(attempt);
+    }
+  }
+
+  private failVoice(attempt: number): void {
+    if (attempt !== this.voiceAttempt) return;
+    this.cancelVoice();
+    this.recordError = '语音识别未完成，请重试或手动填写';
   }
 
   async stopRecord(): Promise<void> {
     if (!this.recording) {
       return;
     }
+    this.clearVoiceTimer();
     this.recording = false;
-    await AsrService.getInstance().stop();
+    const attempt = this.voiceAttempt;
+    if (this.finalTranscript !== null) {
+      await this.onAsrFinal(this.finalTranscript, attempt);
+      return;
+    }
+    this.transcribing = true;
+    this.voiceTimer = setTimeout(() => { this.failVoice(attempt); }, 10000);
+    try {
+      await AsrService.getInstance().stop();
+    } catch (err) {
+      this.failVoice(attempt);
+    }
   }
 
-  async onAsrFinal(text: string): Promise<void> {
+  async onAsrFinal(text: string, attempt: number): Promise<void> {
+    this.clearVoiceTimer();
+    this.finalTranscript = null;
+    this.recording = false;
+    this.transcribing = false;
     this.asrText = text;
     const trimmed = text.trim();
     if (trimmed.length === 0) {
+      this.recordError = '没听清，请再说一次或手动填写';
       return;
     }
     this.extracting = true;
     this.recordError = '';
     try {
       const r = await AIService.getInstance().extractTask(trimmed);
+      if (attempt !== this.voiceAttempt) return;
+      this.draftTranscript = trimmed;
       this.draftTitle = r.title;
       this.draftDetail = r.detail;
       this.draftDeadline = r.deadline;
     } catch (err) {
-      let msg: string = '';
-      if (err instanceof Error) {
-        msg = err.message;
-      } else {
-        msg = JSON.stringify(err);
-      }
-      this.recordError = 'AI 识别失败：' + msg;
+      if (attempt !== this.voiceAttempt) return;
+      this.draftTranscript = trimmed;
+      this.recordError = '未能自动整理，已填入原话，请手动确认';
       this.draftTitle = trimmed;
+      this.draftDetail = '';
+      this.draftDeadline = 0;
     } finally {
-      this.extracting = false;
+      if (attempt === this.voiceAttempt) this.extracting = false;
     }
   }
 

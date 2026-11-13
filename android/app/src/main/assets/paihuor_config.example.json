@@ -1,0 +1,8 @@
+{
+  "relayBaseUrl": "",
+  "relayLanUrl": "",
+  "paihuorKey": "",
+  "minimaxKey": "",
+  "minimaxModel": "MiniMax-M3",
+  "pollIntervalSec": 8
+}

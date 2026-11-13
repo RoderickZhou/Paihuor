@@ -131,4 +131,13 @@ User message:
 
 ## 家庭配对
 
+Pura 70 与 Android 兼容端可以展示、扫描 `paihuor:pair:1:<目标角色>:<百分号编码家庭码>`。扫码只填表，保存前仍需核对角色。二维码不是登录凭证，仅在家人之间展示；旧客户端可以继续手动配对。
+
+### 发送与同步回执（兼容旧端）
+
+- `POST /tasks` 可带 `clientRequestId`（UUID）。中继按家庭、发送角色和该 ID 幂等创建；重试返回同一条任务，不重复推送，也不覆盖已经接下或修改的任务。
+- `POST /sync/ack` 接收 `familyId`、`userId`、安装实例 `deviceId`（UUID）、`platform` 和最多 100 个 `objectIds`。接收端保存成功后才回报，只为同家庭且派给该角色的任务设置 `recipientSyncedAt`。空数组只登记同步时间。
+- `GET /sync/status?familyId=&userId=` 返回 `selfSyncedAt`、`peerSyncedAt`、`selfPushRegistered`、`peerPushRegistered`。推送登记不代表通知显示；已同步也不代表对方本人已接下。
+- 旧端可忽略 `recipientSyncedAt`。旧 iOS 仍可收发和接下任务，但不会主动上报同步回执。
+
 首次启动填写 `familyId`，选择 `userId`，并保存显示名 `userName`。两端固定使用 `wife` / `husband` 两个 userId，对方身份由当前身份自动推导。HarmonyOS 身份必须保存在运行时 Profile 中，同一个 HAP 可分别配置为老公或老婆；不得再从 `AppConfig` 写死本机身份。

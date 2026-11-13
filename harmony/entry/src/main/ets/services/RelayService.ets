@@ -15,6 +15,21 @@ interface KeyHeader {
   'x-paihuor-key': string;
 }
 
+export interface SyncStatus {
+  selfSyncedAt: number;
+  peerSyncedAt: number;
+  selfPushRegistered: boolean;
+  peerPushRegistered: boolean;
+}
+
+interface SyncAcknowledgment {
+  familyId: string;
+  userId: string;
+  deviceId: string;
+  platform: string;
+  objectIds: string[];
+}
+
 // 跨设备中继客户端：优先局域网直连(快)，连不上回退 cloudflared 公网
 export class RelayService {
   private static instance: RelayService;
@@ -94,7 +109,7 @@ export class RelayService {
     }
   }
 
-  async list(familyId: string, since: number): Promise<TaskItem[]> {
+  async list(familyId: string, since: number): Promise<TaskItem[] | null> {
     const b = await this.base();
     const c = http.createHttp();
     try {
@@ -105,15 +120,52 @@ export class RelayService {
         connectTimeout: 8000, readTimeout: 8000
       });
       if (resp.responseCode !== 200) {
-        return [];
+        this.resetBase();
+        return null;
       }
       return JSON.parse(resp.result as string) as TaskItem[];
     } catch (err) {
       hilog.error(0x0000, TAG, 'list: ' + JSON.stringify(err));
       this.resetBase();
-      return [];
+      return null;
     } finally {
       c.destroy();
+    }
+  }
+
+  async acknowledge(familyId: string, userId: string, deviceId: string, objectIds: string[]): Promise<boolean> {
+    const base = await this.base();
+    const client = http.createHttp();
+    try {
+      const body: SyncAcknowledgment = { familyId: familyId, userId: userId, deviceId: deviceId,
+        platform: 'harmony', objectIds: objectIds };
+      const response = await client.request(base + '/sync/ack', {
+        method: http.RequestMethod.POST, header: this.header(), extraData: JSON.stringify(body),
+        connectTimeout: 6000, readTimeout: 6000
+      });
+      return response.responseCode === 200;
+    } catch (err) {
+      this.resetBase();
+      return false;
+    } finally {
+      client.destroy();
+    }
+  }
+
+  async syncStatus(familyId: string, userId: string): Promise<SyncStatus | null> {
+    const base = await this.base();
+    const client = http.createHttp();
+    try {
+      const response = await client.request(base + '/sync/status?familyId=' + encodeURIComponent(familyId)
+        + '&userId=' + encodeURIComponent(userId), {
+        method: http.RequestMethod.GET, header: this.header(), connectTimeout: 6000, readTimeout: 6000
+      });
+      return response.responseCode === 200 ? JSON.parse(response.result as string) as SyncStatus : null;
+    } catch (err) {
+      this.resetBase();
+      return null;
+    } finally {
+      client.destroy();
     }
   }
 

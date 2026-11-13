@@ -18,6 +18,7 @@ public final class PollService extends Service {
     private final Handler handler = new Handler(Looper.getMainLooper());
     private RelayClient relay;
     private int intervalMs = 8000;
+    private boolean syncing;
     private final Runnable loop = new Runnable() {
         @Override public void run() {
             poll();
@@ -37,28 +38,55 @@ public final class PollService extends Service {
     }
 
     private void poll() {
-        if (!Profile.isComplete(this) || !relay.usable()) return;
+        if (syncing || !Profile.isComplete(this) || !relay.usable()) return;
+        final String family = Profile.familyId(this);
+        final String role = Profile.userId(this);
+        syncing = true;
         new Thread(() -> {
             try {
-                long previous = TaskCache.lastSync(this);
-                JSONArray remote = relay.fetch(Profile.familyId(this), previous);
+                long previous = TaskCache.lastSync(this, family);
+                for (TaskItem item : TaskCache.load(this)) {
+                    if (!current(family, role)) return;
+                    if (!item.queued || !item.familyId.equals(family) || !item.fromUserId.equals(role)) continue;
+                    try {
+                        TaskItem sent = TaskOutbox.send(this, relay, item);
+                        TaskCache.finishSending(this, item.objectId, sent);
+                        TaskOutbox.cleanup(this, item);
+                        changed();
+                    } catch (Exception ignored) { break; }
+                }
+                JSONArray remote = relay.fetch(family, previous);
+                if (!current(family, role)) return;
                 TaskCache.merge(this, remote);
                 List<TaskItem> tasks = TaskCache.load(this);
-                long newest = previous;
+                JSONArray acks = new JSONArray();
                 for (TaskItem item : tasks) {
-                    newest = Math.max(newest, item.updatedAt);
-                    if (item.updatedAt > previous && item.toUserId.equals(Profile.userId(this))
-                            && "pending".equals(item.status) && !item.deleted) {
+                    if (!item.familyId.equals(family) || !item.toUserId.equals(role) || item.queued || item.deleted) continue;
+                    if (item.recipientSyncedAt == 0 && acks.length() < 100
+                            && item.objectId.matches("(?i)[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}")) acks.put(item.objectId);
+                    if (item.updatedAt > previous && item.recipientSyncedAt == 0
+                            && "pending".equals(item.status) && !item.archived) {
                         String title = item.title.isEmpty() ? item.rawText : item.title;
                         ((NotificationManager) getSystemService(NOTIFICATION_SERVICE))
                                 .notify(item.objectId.hashCode(), notification(TASK_CHANNEL,
                                         "家人派来一件事", title, true));
                     }
                 }
-                if (newest > previous) sendBroadcast(new Intent("dev.zx.paihuor.SYNCED").setPackage(getPackageName()));
-            } catch (Throwable ignored) {
+                if (remote.length() > 0) changed();
+                if (current(family, role)) relay.acknowledge(family, role, Profile.deviceId(this), acks);
+            } catch (Exception ignored) {
+            } finally {
+                handler.post(() -> syncing = false);
             }
         }).start();
+    }
+
+    private boolean current(String family, String role) {
+        return family.equals(Profile.familyId(this)) && role.equals(Profile.userId(this));
+    }
+
+    private void changed() {
+        sendBroadcast(new Intent("dev.zx.paihuor.SYNCED").setPackage(getPackageName()));
     }
 
     private void createChannels() {
@@ -82,7 +110,7 @@ public final class PollService extends Service {
                 .build();
     }
 
-    @Override public int onStartCommand(Intent intent, int flags, int startId) { return START_STICKY; }
+    @Override public int onStartCommand(Intent intent, int flags, int startId) { poll(); return START_STICKY; }
     @Override public void onDestroy() { handler.removeCallbacks(loop); super.onDestroy(); }
     @Override public IBinder onBind(Intent intent) { return null; }
 }

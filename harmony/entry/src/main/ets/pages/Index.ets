@@ -1,5 +1,7 @@
 import { abilityAccessCtrl, common, Permissions } from '@kit.AbilityKit';
 import { image } from '@kit.ImageKit';
+import { util } from '@kit.ArkTS';
+import { scanBarcode, scanCore } from '@kit.ScanKit';
 import { Constants } from '../constants/Constants';
 import { TaskItem, TaskStatus, ReminderConfig, NegotiationMsg, TaskImage } from '../models/TaskModels';
 import { TaskStore } from '../services/TaskStore';
@@ -48,6 +50,7 @@ struct Index {
   @State negProposedCode: number = 0;
   // 主屏面板：收集箱 / 归档，和 iOS 一样在同一页内切换
   @State selectedBoard: string = 'inbox';
+  @State directionFilter: string = 'all';
   @State archivedTasks: TaskItem[] = [];
   @State archivedCount: number = 0;
   @State doneUnarchivedCount: number = 0;
@@ -69,7 +72,12 @@ struct Index {
   @State setupFamilyId: string = AppConfig.FAMILY_ID;
   @State setupUserId: string = '';
   @State setupUserName: string = '';
+  @State showPairingQr: boolean = false;
+  @State pairingHealth: string = '';
+  @State savingDraft: boolean = false;
   private lastSync: number = 0;
+  private syncRunning: boolean = false;
+  private syncGeneration: number = 0;
   private pollTimer: number = -1;
   private sessionStartedAt: number = Date.now();
   private notifiedObjectIds: string[] = [];
@@ -92,7 +100,7 @@ struct Index {
     await this.startProfileSession(ctx);
   }
 
-  private async startProfileSession(ctx: common.UIAbilityContext): Promise<void> {
+  private async startProfileSession(ctx: common.UIAbilityContext, changed: boolean = false): Promise<void> {
     await TaskStore.getInstance().whenReady();
     // 申请通知权限（角标/横幅需要）
     try {
@@ -105,7 +113,7 @@ struct Index {
     }
     this.refresh();
     this.startPolling();
-    DeviceService.getInstance().ensureRegisteredToken();
+    DeviceService.getInstance().ensureRegisteredToken(changed);
     AsrService.getInstance().prewarm();
   }
 
@@ -116,6 +124,10 @@ struct Index {
 
   onPageHide(): void {
     if (this.recording) this.cancelVoice();
+  }
+
+  onPageShow(): void {
+    this.poll();
   }
 
   onBackPress(): boolean {
@@ -143,7 +155,9 @@ struct Index {
     }
     this.doneUnarchivedCount = doneU;
     this.archivedTasks = arch;
-    this.tasks = this.selectedBoard === 'archive' ? arch : active;
+    const board = this.selectedBoard === 'archive' ? arch : active;
+    this.tasks = board.filter((t: TaskItem) => this.directionFilter === 'all'
+      || (this.directionFilter === 'incoming' ? t.toUserId === this.myUserId : t.fromUserId === this.myUserId));
     NotificationService.getInstance().setBadge(unread); // 桌面图标角标未读数
     // 推送桌面服务卡片更新（App 活着时近实时；无卡片则内部直接返回）
     try {
@@ -169,12 +183,38 @@ struct Index {
 
   // 轮询中继，把对方建/改的任务合并到本地
   async poll(): Promise<void> {
-    if (!this.profileConfigured || !RelayService.getInstance().enabled()) {
+    if (this.syncRunning || !this.profileConfigured || !RelayService.getInstance().enabled()) {
       return;
     }
-    const remote = await RelayService.getInstance().list(this.familyId, this.lastSync);
+    this.syncRunning = true;
+    const generation = this.syncGeneration;
+    try {
+      await this.syncTasks(this.familyId, this.myUserId, generation);
+    } catch (err) {
+      // The unchanged cursor and queued tasks are retried on the next poll.
+    } finally {
+      this.syncRunning = false;
+      if (generation !== this.syncGeneration) this.poll();
+    }
+  }
+
+  private async syncTasks(family: string, role: string, generation: number): Promise<void> {
+    const store = TaskStore.getInstance();
+    const relay = RelayService.getInstance();
+    const pending = store.getAll().filter((t: TaskItem) => t.familyId === family && t.fromUserId === role && this.isQueued(t));
+    for (const task of pending) {
+      if (generation !== this.syncGeneration) return;
+      const saved = await relay.create(task);
+      if (!saved || saved.objectId.length === 0) break;
+      await store.finishSending(task, saved);
+      this.refresh();
+    }
+    if (generation !== this.syncGeneration) return;
+    const remote = await relay.list(family, this.lastSync);
+    if (remote === null || generation !== this.syncGeneration) return;
     if (remote.length === 0) {
       this.firstPollDone = true;
+      await this.reportSync(family, role);
       return;
     }
     let mx = this.lastSync;
@@ -183,7 +223,6 @@ struct Index {
         mx = remote[i].updatedAt;
       }
     }
-    this.lastSync = mx;
     // 合并前记录已知 objectId，用来识别"新到的活"
     const beforeIds: string[] = [];
     const known = TaskStore.getInstance().getAll();
@@ -191,6 +230,8 @@ struct Index {
       beforeIds.push(known[i].objectId);
     }
     const orphan = await TaskStore.getInstance().mergeRemote(remote);
+    if (generation !== this.syncGeneration) return;
+    this.lastSync = mx;
     // 远端删除的任务，撤掉本机为它排的提醒
     if (orphan.length > 0) {
       await ReminderService.getInstance().cancelForTask(orphan);
@@ -215,6 +256,15 @@ struct Index {
     if (this.showNegotiate) {
       this.reloadNeg();
     }
+    if (generation === this.syncGeneration) await this.reportSync(family, role);
+  }
+
+  private async reportSync(family: string, role: string): Promise<void> {
+    const ids = TaskStore.getInstance().getAll().filter((t: TaskItem) => t.familyId === family && t.toUserId === role
+      && !t.deleted && !t.recipientSyncedAt && /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(t.objectId))
+      .slice(0, 100).map((t: TaskItem) => t.objectId);
+    const device = ProfileService.getInstance().deviceId();
+    if (device.length > 0) await RelayService.getInstance().acknowledge(family, role, device, ids);
   }
 
   private shouldNotifyNewTask(t: TaskItem): boolean {
@@ -262,7 +312,7 @@ struct Index {
   }
 
   private canSaveProfile(): boolean {
-    return this.setupFamilyId.trim().length > 0
+    return this.setupFamilyId.trim().length > 0 && this.setupFamilyId.trim().length <= 120
       && (this.setupUserId === FamilyRole.WIFE || this.setupUserId === FamilyRole.HUSBAND);
   }
 
@@ -274,6 +324,41 @@ struct Index {
       this.setupUserName = profile.displayName();
     }
     this.showProfileSetup = true;
+    this.showPairingQr = false;
+    this.pairingHealth = '正在检查同步…';
+    this.loadPairingStatus();
+  }
+
+  private async loadPairingStatus(): Promise<void> {
+    const status = await RelayService.getInstance().syncStatus(this.familyId, this.myUserId);
+    if (!this.showProfileSetup) return;
+    this.pairingHealth = status ? '本机同步：' + this.syncTime(status.selfSyncedAt)
+      + '\n对方同步：' + this.syncTime(status.peerSyncedAt)
+      + '\n本机推送：' + (status.selfPushRegistered ? '已登记' : '未登记') : '无法检查中继连接';
+  }
+
+  private syncTime(time: number): string {
+    return time > 0 ? Constants.formatDeadline(time) : '暂无记录';
+  }
+
+  private async scanPairing(): Promise<void> {
+    try {
+      const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
+      const result = await scanBarcode.startScanForResult(ctx, { scanTypes: [scanCore.ScanType.QR_CODE] });
+      const match = /^paihuor:pair:1:(wife|husband):(.+)$/.exec(result.originalValue);
+      if (!match) { this.toast('这不是派活儿家庭二维码'); return; }
+      const family = decodeURIComponent(match[2]).trim();
+      if (family.length === 0 || family.length > 120) { this.toast('家庭码无效'); return; }
+      this.setupFamilyId = family;
+      this.setupUserId = match[1];
+      this.toast('请核对家庭码和身份后保存');
+    } catch (err) {
+      this.toast('扫码未完成');
+    }
+  }
+
+  private pairingCode(): string {
+    return 'paihuor:pair:1:' + this.otherUserId + ':' + encodeURIComponent(this.familyId);
   }
 
   private async saveProfile(): Promise<void> {
@@ -284,6 +369,7 @@ struct Index {
       const profile = await ProfileService.getInstance().save(
         this.setupFamilyId, this.setupUserId, this.setupUserName);
       this.stopPolling();
+      this.syncGeneration++;
       this.lastSync = 0;
       this.firstPollDone = false;
       this.notifiedObjectIds = [];
@@ -291,7 +377,7 @@ struct Index {
       this.applyProfile(profile);
       this.showProfileSetup = false;
       const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
-      await this.startProfileSession(ctx);
+      await this.startProfileSession(ctx, true);
       this.toast('家庭身份已保存');
     } catch (err) {
       this.toast('保存失败，请检查家庭配对码');
@@ -339,6 +425,13 @@ struct Index {
         }
         .width('100%')
         .padding({ left: 24, right: 24, top: 16, bottom: 14 })
+
+        Row({ space: 4 }) {
+          this.DirectionButton('all', '全部')
+          this.DirectionButton('incoming', '派给我')
+          this.DirectionButton('outgoing', '我派出')
+        }
+        .width('100%').padding({ left: 18, right: 18, bottom: 8 })
 
         if (this.tasks.length === 0) {
           this.EmptyState()
@@ -408,6 +501,7 @@ struct Index {
 
   @Builder
   ProfileSetup(canCancel: boolean) {
+    Scroll() {
     Column() {
       Row() {
         if (canCancel) {
@@ -427,15 +521,26 @@ struct Index {
       }
       .width('100%')
 
-      Text(canCancel ? '修改后会重新登记本机通知身份' : '两台手机填写同一个家庭配对码，再分别选择自己的身份。')
-        .fontSize(14).fontColor(Constants.COLOR_TEXT_SECONDARY)
-        .lineHeight(22).margin({ top: 14, bottom: 28 })
+      Row({ space: 8 }) {
+        Button('扫码配对').layoutWeight(1).height(42).onClick(() => { this.scanPairing(); })
+        if (canCancel) {
+          Button(this.showPairingQr ? '收起二维码' : '家庭二维码')
+            .layoutWeight(1).height(42)
+            .onClick(() => { this.showPairingQr = !this.showPairingQr; })
+        }
+      }
+      .width('100%').margin({ top: 14, bottom: 18 })
+      if (canCancel && this.showPairingQr) {
+        QRCode(this.pairingCode()).width(208).height(208).backgroundColor(Color.White)
+          .margin({ bottom: 18 })
+      }
 
       Text('家庭配对码').fontSize(14).fontWeight(FontWeight.Medium).fontColor(Constants.COLOR_TEXT_PRIMARY)
         .width('100%').textAlign(TextAlign.Start)
-      TextInput({ placeholder: '例如 fam-zx-001', text: this.setupFamilyId })
+      TextInput({ placeholder: '例如 1217', text: this.setupFamilyId })
         .height(52).fontSize(16).margin({ top: 8, bottom: 24 })
         .backgroundColor(Color.White).borderRadius(8)
+        .selectAll(true).maxLength(120)
         .onChange((value: string) => { this.setupFamilyId = value; })
 
       Text('我是').fontSize(14).fontWeight(FontWeight.Medium).fontColor(Constants.COLOR_TEXT_PRIMARY)
@@ -460,10 +565,25 @@ struct Index {
         .margin({ top: 32 })
         .enabled(this.canSaveProfile())
         .onClick(() => { this.saveProfile(); })
+      if (canCancel && this.pairingHealth.length > 0) {
+        Text(this.pairingHealth).fontSize(14).lineHeight(22).width('100%')
+          .fontColor(Constants.COLOR_TEXT_SECONDARY).margin({ top: 16 })
+      }
     }
-    .width('100%').height('100%')
+    .width('100%')
     .padding({ left: 28, right: 28, top: 34, bottom: 30 })
+    }
+    .width('100%').height('100%').align(Alignment.Top).scrollBar(BarState.Off)
     .backgroundColor(Constants.COLOR_BG)
+  }
+
+  @Builder
+  DirectionButton(key: string, label: string) {
+    Button(label).type(ButtonType.Normal).height(40).layoutWeight(1).borderRadius(8).fontSize(14)
+      .backgroundColor(this.directionFilter === key ? '#DDE6FF' : Color.Transparent)
+      .fontColor(this.directionFilter === key ? Constants.COLOR_PRIMARY : Constants.COLOR_TEXT_PRIMARY)
+      .accessibilitySelected(this.directionFilter === key)
+      .onClick(() => { this.directionFilter = key; this.refresh(); })
   }
 
   @Builder
@@ -589,11 +709,11 @@ struct Index {
         .width(120)
         .height(120)
         .margin({ bottom: 18 })
-      Text(this.selectedBoard === 'archive' ? '归档里还没有记录' : '没有任务')
+      Text(this.directionFilter !== 'all' ? '这个筛选下没有任务' : (this.selectedBoard === 'archive' ? '归档里还没有记录' : '没有任务'))
         .fontSize(22)
         .fontWeight(FontWeight.Bold)
         .fontColor(Constants.COLOR_TEXT_PRIMARY)
-      Text(this.selectedBoard === 'archive' ? '完成后的任务会收进这里' : '点击 + 按钮即可添加')
+      Text(this.directionFilter !== 'all' ? '' : (this.selectedBoard === 'archive' ? '完成后的任务会收进这里' : '点击 + 按钮即可添加'))
         .fontSize(16)
         .fontColor(Constants.COLOR_TEXT_SECONDARY)
         .margin({ top: 8 })
@@ -645,7 +765,7 @@ struct Index {
       .layoutWeight(1)
       .alignItems(HorizontalAlign.Start)
       .onClick(() => {
-        this.openDetail(item);
+        if (this.isQueued(item)) this.poll(); else this.openDetail(item);
       })
     }
     .width('100%')
@@ -677,6 +797,7 @@ struct Index {
   @Builder
   SwipeEnd(item: TaskItem) {
     Row() {
+      if (!this.isQueued(item)) {
       if (!item.archived && item.status !== TaskStatus.DONE) {
         this.SwipeBtn('商量', Constants.COLOR_WARNING, () => { this.openNegotiate(item); })
       }
@@ -688,6 +809,7 @@ struct Index {
       if (this.isCreator(item)) {
         this.SwipeBtn('编辑', Constants.COLOR_PRIMARY_DARK, () => { this.openEdit(item); })
         this.SwipeBtn('删除', Constants.COLOR_DANGER, () => { this.onDelete(item); })
+      }
       }
     }
     .height('100%')
@@ -851,7 +973,7 @@ struct Index {
             .type(ButtonType.Normal).fontColor(Color.White)
             .backgroundColor(Constants.COLOR_PRIMARY).layoutWeight(1).height(46)
             .borderRadius(10)
-            .enabled(!this.recording && !this.transcribing && !this.extracting)
+            .enabled(!this.recording && !this.transcribing && !this.extracting && !this.savingDraft && !this.uploadingImg)
             .onClick(() => { this.onSend(); })
         }
         .width('100%')
@@ -1674,13 +1796,14 @@ struct Index {
   }
 
   async onSend(): Promise<void> {
-    if (this.recording || this.transcribing || this.extracting) return;
+    if (this.recording || this.transcribing || this.extracting || this.savingDraft || this.uploadingImg) return;
     if (this.draftTitle.trim().length === 0) {
       this.toast('说点什么吧');
       return;
     }
     const t = new TaskItem();
-    t.id = '' + Date.now() + '_' + Math.floor(Math.random() * 100000);
+    t.id = util.generateRandomUUID();
+    t.clientRequestId = t.id;
     t.familyId = this.familyId;
     t.fromUserId = this.myUserId;
     t.toUserId = this.otherUserId;
@@ -1692,19 +1815,19 @@ struct Index {
     t.reminder = new ReminderConfig();
     t.images = this.draftImages.slice();
     t.createdAt = Date.now();
-    // 先存本地（离线也能用）
-    await TaskStore.getInstance().upsert(t);
-    this.closeCreate();
-    this.refresh();
-    // 推送到中继做跨设备投递
-    const saved = await RelayService.getInstance().create(t);
-    if (saved !== null && saved.objectId.length > 0) {
-      t.objectId = saved.objectId;
-      await TaskStore.getInstance().upsert(t);
+    this.savingDraft = true;
+    try {
+      await TaskStore.getInstance().queue(t);
+      this.closeCreate();
+      this.selectedBoard = 'inbox';
+      if (this.directionFilter === 'incoming') this.directionFilter = 'outgoing';
       this.refresh();
-      this.toast('已发出');
-    } else {
-      this.toast('已存本地（中继未连上）');
+      this.toast('已加入待发送');
+      this.poll();
+    } catch (err) {
+      this.toast('保存草稿失败，请重试');
+    } finally {
+      this.savingDraft = false;
     }
   }
 
@@ -1939,12 +2062,19 @@ struct Index {
   }
 
   private directionLabel(item: TaskItem): string {
-    const st = this.statusLabel(item.status);
+    let st = this.statusLabel(item.status);
     const img = item.images.length > 0 ? (' · 📷' + item.images.length) : '';
     if (this.isReceiver(item)) {
       return '来自 ' + this.displayName(item.fromUserId) + ' · ' + st + img;
     }
+    if (this.isQueued(item)) st = '待发送';
+    else if (item.status === TaskStatus.PENDING) st = item.recipientSyncedAt > 0 ? '对方已同步' : '已发出';
+    else if (item.status === TaskStatus.RECEIVED) st = '对方已接下';
     return '给 ' + this.displayName(item.toUserId) + ' · ' + st + img;
+  }
+
+  private isQueued(item: TaskItem): boolean {
+    return !item.objectId && !!item.clientRequestId;
   }
 
   openArchive(): void {

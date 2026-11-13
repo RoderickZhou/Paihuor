@@ -56,5 +56,7 @@ export class TaskItem {
   createdAt: number = 0;
   updatedAt: number = 0;            // 中继维护，用于增量轮询
   receivedAt: number = 0;
+  recipientSyncedAt: number = 0;
+  clientRequestId: string = '';
   doneAt: number = 0;
 }

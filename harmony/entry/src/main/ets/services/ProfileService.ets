@@ -1,6 +1,7 @@
 import { common } from '@kit.AbilityKit';
 import { preferences } from '@kit.ArkData';
 import { hilog } from '@kit.PerformanceAnalysisKit';
+import { util } from '@kit.ArkTS';
 import { FamilyProfile } from '../models/FamilyProfile';
 
 const TAG = 'ProfileService';
@@ -12,6 +13,7 @@ export class ProfileService {
   private store: preferences.Preferences | null = null;
   private profile: FamilyProfile | null = null;
   private initPromise: Promise<void> | null = null;
+  private installationId: string = '';
 
   static getInstance(): ProfileService {
     if (!ProfileService.instance) {
@@ -37,6 +39,10 @@ export class ProfileService {
     return this.profile;
   }
 
+  deviceId(): string {
+    return this.installationId;
+  }
+
   async save(familyId: string, userId: string, userName: string): Promise<FamilyProfile> {
     const profile = FamilyProfile.create(familyId, userId, userName);
     if (!profile.isValid()) {
@@ -53,6 +59,12 @@ export class ProfileService {
   private async doInit(context: common.Context): Promise<void> {
     try {
       this.store = await preferences.getPreferences(context, { name: PROFILE_PREF_NAME });
+      this.installationId = await this.store.get('installation_id', '') as string;
+      if (this.installationId.length === 0) {
+        this.installationId = util.generateRandomUUID();
+        await this.store.put('installation_id', this.installationId);
+        await this.store.flush();
+      }
       const raw = await this.store.get(PROFILE_PREF_KEY, '') as string;
       if (raw.length > 0) {
         const saved = JSON.parse(raw) as FamilyProfile;

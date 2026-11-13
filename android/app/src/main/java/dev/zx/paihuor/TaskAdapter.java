@@ -105,6 +105,9 @@ public final class TaskAdapter extends BaseAdapter {
 
     private String directionText(TaskItem item) {
         String direction = item.fromUserId.equals(userId) ? "我派给对方" : "对方派给我";
+        if (item.fromUserId.equals(userId) && !"done".equals(item.status) && !"negotiating".equals(item.status)) {
+            return direction + " · " + TaskRepository.receipt(item);
+        }
         String status;
         switch (item.status) {
             case "received": status = "已收到"; break;

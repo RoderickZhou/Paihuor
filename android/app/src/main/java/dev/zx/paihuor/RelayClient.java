@@ -34,6 +34,16 @@ public final class RelayClient {
         return TaskJson.decode(new JSONObject(request("POST", "/tasks", TaskJson.encode(item), null)));
     }
 
+    public void acknowledge(String family, String role, String device, JSONArray ids) throws Exception {
+        JSONObject body = new JSONObject().put("familyId", family).put("userId", role)
+                .put("deviceId", device).put("platform", "android").put("objectIds", ids);
+        request("POST", "/sync/ack", body, null);
+    }
+
+    public JSONObject syncStatus(String family, String role) throws Exception {
+        return new JSONObject(request("GET", "/sync/status?familyId=" + encode(family) + "&userId=" + encode(role), null, null));
+    }
+
     public TaskItem patch(TaskItem item, JSONObject fields) throws Exception {
         String path = "/tasks/" + encode(item.objectId);
         return TaskJson.decode(new JSONObject(request("POST", path, fields, null)));

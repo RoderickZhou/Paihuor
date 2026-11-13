@@ -32,4 +32,27 @@ public class TaskRepositoryTest {
         assertEquals(2000L, task.doneAt);
         assertEquals(true, task.archived);
     }
+
+    @Test public void directionFiltersPreserveFamilyAndBoardBoundaries() {
+        TaskItem sent = TaskItem.fixture("sent", "home", "husband", "wife", "pending", false);
+        TaskItem incoming = TaskItem.fixture("incoming", "home", "wife", "husband", "pending", false);
+        TaskItem archived = TaskItem.fixture("archived", "home", "wife", "husband", "done", true);
+        TaskItem unrelated = TaskItem.fixture("unrelated", "other", "wife", "husband", "pending", false);
+        List<TaskItem> all = Arrays.asList(sent, incoming, archived, unrelated);
+        assertEquals(Arrays.asList(incoming), TaskRepository.visible(all, "home", "husband", false, TaskRepository.Direction.INCOMING));
+        assertEquals(Arrays.asList(sent), TaskRepository.visible(all, "home", "husband", false, TaskRepository.Direction.OUTGOING));
+        assertEquals(Arrays.asList(archived), TaskRepository.visible(all, "home", "husband", true, TaskRepository.Direction.INCOMING));
+    }
+
+    @Test public void receiptDistinguishesQueueServerRecipientSyncAndManualAccept() {
+        TaskItem task = TaskItem.fixture("task", "home", "wife", "husband", "pending", false);
+        task.queued = true;
+        assertEquals("待发送", TaskRepository.receipt(TaskJson.decode(TaskJson.encode(task))));
+        task.queued = false;
+        assertEquals("已发出", TaskRepository.receipt(task));
+        task.recipientSyncedAt = 100;
+        assertEquals("对方已同步", TaskRepository.receipt(TaskJson.decode(TaskJson.encode(task))));
+        TaskRepository.advance(task, 200);
+        assertEquals("对方已接下", TaskRepository.receipt(task));
+    }
 }

@@ -1,6 +1,7 @@
 package dev.zx.paihuor;
 
 import android.content.Context;
+import android.util.AtomicFile;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
@@ -21,8 +22,8 @@ public final class TaskCache {
     public static synchronized List<TaskItem> load(Context context) {
         List<TaskItem> result = new ArrayList<>();
         File file = new File(context.getFilesDir(), FILE_NAME);
-        if (!file.exists()) return result;
-        try (FileInputStream input = new FileInputStream(file);
+        if (!file.exists() && !new File(file.getPath() + ".bak").exists()) return result;
+        try (FileInputStream input = new AtomicFile(file).openRead();
              ByteArrayOutputStream output = new ByteArrayOutputStream()) {
             byte[] buffer = new byte[4096];
             int count;
@@ -47,7 +48,8 @@ public final class TaskCache {
             JSONObject value = remote.optJSONObject(index);
             if (value == null) continue;
             TaskItem item = TaskJson.decode(value);
-            if (!item.objectId.isEmpty()) tasks.put(item.objectId, item);
+            TaskItem existing = tasks.get(item.objectId);
+            if (!item.objectId.isEmpty() && (existing == null || existing.updatedAt <= item.updatedAt)) tasks.put(item.objectId, item);
         }
         save(context, new ArrayList<>(tasks.values()));
     }
@@ -59,9 +61,22 @@ public final class TaskCache {
         save(context, new ArrayList<>(tasks.values()));
     }
 
-    public static long lastSync(Context context) {
+    public static synchronized void finishSending(Context context, String pendingId, TaskItem sent) {
+        List<TaskItem> tasks = load(context);
+        TaskItem latest = sent;
+        for (TaskItem item : tasks) {
+            if (item.objectId.equals(sent.objectId) && item.updatedAt > latest.updatedAt) latest = item;
+        }
+        tasks.removeIf(item -> item.objectId.equals(pendingId) || item.objectId.equals(sent.objectId));
+        tasks.add(latest);
+        save(context, tasks);
+    }
+
+    public static long lastSync(Context context, String family) {
         long latest = 0;
-        for (TaskItem item : load(context)) latest = Math.max(latest, item.updatedAt);
+        for (TaskItem item : load(context)) {
+            if (!item.queued && item.familyId.equals(family)) latest = Math.max(latest, item.updatedAt);
+        }
         return latest;
     }
 
@@ -74,9 +89,15 @@ public final class TaskCache {
         } catch (Exception ignored) {
             return;
         }
-        try (FileOutputStream output = context.openFileOutput(FILE_NAME, Context.MODE_PRIVATE)) {
+        AtomicFile file = new AtomicFile(new File(context.getFilesDir(), FILE_NAME));
+        FileOutputStream output = null;
+        try {
+            output = file.startWrite();
             output.write(root.toString().getBytes(StandardCharsets.UTF_8));
-        } catch (Exception ignored) {
+            file.finishWrite(output);
+        } catch (Exception error) {
+            file.failWrite(output);
+            throw new IllegalStateException("Cannot save task cache", error);
         }
     }
 }

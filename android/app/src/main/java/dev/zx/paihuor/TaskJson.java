@@ -22,6 +22,9 @@ public final class TaskJson {
         item.archived = value.optBoolean("archived");
         item.deleted = value.optBoolean("deleted");
         item.receivedAt = value.optLong("receivedAt");
+        item.recipientSyncedAt = value.optLong("recipientSyncedAt");
+        item.clientRequestId = value.optString("clientRequestId");
+        item.queued = value.optBoolean("queued");
         item.doneAt = value.optLong("doneAt");
 
         JSONArray messages = value.optJSONArray("negotiation");
@@ -73,6 +76,9 @@ public final class TaskJson {
         value.put("archived", item.archived);
         value.put("deleted", item.deleted);
         value.put("receivedAt", item.receivedAt);
+        value.put("recipientSyncedAt", item.recipientSyncedAt);
+        if (!item.clientRequestId.isEmpty()) value.put("clientRequestId", item.clientRequestId);
+        if (item.queued) value.put("queued", true);
         value.put("doneAt", item.doneAt);
 
         JSONArray messages = new JSONArray();

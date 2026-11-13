@@ -20,6 +20,7 @@ import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.text.InputType;
 import android.provider.MediaStore;
 import android.view.Gravity;
 import android.view.MotionEvent;
@@ -52,6 +53,10 @@ import java.util.Locale;
 import java.util.UUID;
 import org.json.JSONArray;
 import org.json.JSONObject;
+import com.google.zxing.BarcodeFormat;
+import com.google.zxing.integration.android.IntentIntegrator;
+import com.google.zxing.integration.android.IntentResult;
+import com.journeyapps.barcodescanner.BarcodeEncoder;
 
 public final class MainActivity extends Activity implements TaskAdapter.Listener {
     private static final int PICK_IMAGES = 3001;
@@ -78,6 +83,11 @@ public final class MainActivity extends Activity implements TaskAdapter.Listener
     private LinearLayout imagePreviewRow;
     private MandarinSpeech speech;
     private VoiceInput voiceInput;
+    private EditText pairingFamily;
+    private RadioButton pairingHusband;
+    private RadioButton pairingWife;
+    private TaskRepository.Direction direction = TaskRepository.Direction.ALL;
+    private final List<Button> directionButtons = new ArrayList<>();
 
     private final BroadcastReceiver syncedReceiver = new BroadcastReceiver() {
         @Override public void onReceive(Context context, Intent intent) { refreshList(); }
@@ -128,11 +138,12 @@ public final class MainActivity extends Activity implements TaskAdapter.Listener
         page.setPadding(dp(28), dp(38), dp(28), dp(28));
         page.setBackgroundColor(BG);
         page.addView(label("家庭配对", 34, TEXT, true));
-        TextView note = label("两台手机填写同一个家庭码，再选择这台手机是谁。", 16, SECONDARY, false);
-        note.setPadding(0, dp(12), 0, dp(28));
-        page.addView(note);
-
         EditText family = input("例如 fam-zx-001");
+        pairingFamily = family;
+        family.setSingleLine(true);
+        family.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
+        family.setText(Profile.familyId(this));
+        family.setOnFocusChangeListener((view, focused) -> { if (focused) family.selectAll(); });
         page.addView(section("家庭码"));
         page.addView(family, match(dp(54)));
 
@@ -141,23 +152,43 @@ public final class MainActivity extends Activity implements TaskAdapter.Listener
         RadioGroup roles = new RadioGroup(this);
         roles.setOrientation(LinearLayout.HORIZONTAL);
         RadioButton husband = new RadioButton(this);
+        pairingHusband = husband;
+        husband.setId(View.generateViewId());
         husband.setText("老公");
         husband.setTextSize(18);
         husband.setChecked(true);
         RadioButton wife = new RadioButton(this);
+        pairingWife = wife;
+        wife.setId(View.generateViewId());
         wife.setText("老婆");
         wife.setTextSize(18);
         roles.addView(husband, new LinearLayout.LayoutParams(0, dp(54), 1));
         roles.addView(wife, new LinearLayout.LayoutParams(0, dp(54), 1));
+        roles.check("wife".equals(Profile.userId(this)) ? wife.getId() : husband.getId());
         page.addView(roles);
 
         page.addView(space(18));
         page.addView(section("显示名称"));
         EditText name = input("老公");
+        if (Profile.isComplete(this)) name.setText(Profile.userName(this));
         page.addView(name, match(dp(54)));
 
+        LinearLayout pairActions = new LinearLayout(this);
+        Button scan = new Button(this);
+        scan.setText("扫码配对");
+        scan.setOnClickListener(view -> new IntentIntegrator(this).setDesiredBarcodeFormats(IntentIntegrator.QR_CODE)
+                .setPrompt("扫描派活儿家庭二维码").setBeepEnabled(false).initiateScan());
+        pairActions.addView(scan, weighted());
+        if (Profile.isComplete(this)) {
+            Button qr = new Button(this);
+            qr.setText("家庭二维码");
+            qr.setOnClickListener(view -> showPairingCode());
+            pairActions.addView(qr, weighted());
+        }
+        page.addView(pairActions, match(dp(52)));
+
         Button enter = new Button(this);
-        enter.setText("进入派活儿");
+        enter.setText("保存配对");
         enter.setTextColor(Color.WHITE);
         enter.setTextSize(17);
         enter.setBackground(round(PRIMARY, 27));
@@ -166,7 +197,7 @@ public final class MainActivity extends Activity implements TaskAdapter.Listener
         page.addView(enter, enterParams);
         enter.setOnClickListener(view -> {
             String familyId = family.getText().toString().trim();
-            if (familyId.isEmpty()) { family.setError("请输入家庭码"); return; }
+            if (familyId.isEmpty() || familyId.length() > 120) { family.setError("请填写有效的家庭码"); return; }
             String role = wife.isChecked() ? "wife" : "husband";
             String display = name.getText().toString().trim();
             if (display.isEmpty()) display = wife.isChecked() ? "老婆" : "老公";
@@ -175,16 +206,71 @@ public final class MainActivity extends Activity implements TaskAdapter.Listener
         });
         roles.setOnCheckedChangeListener((group, checkedId) ->
                 name.setHint(wife.isChecked() ? "老婆" : "老公"));
-        setContentView(page);
+        if (Profile.isComplete(this)) {
+            Button cancel = new Button(this);
+            cancel.setText("取消");
+            cancel.setOnClickListener(view -> showMain());
+            page.addView(cancel, match(dp(48)));
+            TextView health = label("正在检查同步…", 14, TEXT, false);
+            health.setPadding(0, dp(10), 0, 0);
+            page.addView(health, matchWrap());
+            String savedFamily = Profile.familyId(this), savedRole = Profile.userId(this);
+            new Thread(() -> {
+                String result;
+                try {
+                    JSONObject value = relay.syncStatus(savedFamily, savedRole);
+                    result = "本机同步：" + syncTime(value.optLong("selfSyncedAt"))
+                            + "\n对方同步：" + syncTime(value.optLong("peerSyncedAt"))
+                            + "\n本机通知：" + (getSystemService(android.app.NotificationManager.class).areNotificationsEnabled() ? "后台轮询，通知已开启" : "系统通知未开启");
+                } catch (Exception error) { result = "无法检查中继连接"; }
+                String status = result;
+                runOnUiThread(() -> health.setText(status));
+            }, "pairing-status").start();
+        }
+        ScrollView scroll = new ScrollView(this);
+        scroll.addView(page);
+        page.setFocusableInTouchMode(true);
+        setContentView(scroll);
+        page.requestFocus();
+    }
+
+    private static String syncTime(long time) {
+        return time == 0 ? "暂无记录" : new SimpleDateFormat("MM-dd HH:mm", Locale.CHINA).format(new Date(time));
+    }
+
+    private void showPairingCode() {
+        try {
+            String family = Uri.encode(Profile.familyId(this));
+            String code = "paihuor:pair:1:" + Profile.counterpart(this) + ":" + family;
+            ImageView qr = new ImageView(this);
+            qr.setImageBitmap(new BarcodeEncoder().encodeBitmap(code, BarcodeFormat.QR_CODE, dp(240), dp(240)));
+            qr.setAdjustViewBounds(true);
+            new AlertDialog.Builder(this).setTitle("家庭二维码").setView(qr).setPositiveButton("关闭", null).show();
+        } catch (Exception error) { toast("二维码生成失败"); }
     }
 
     private void showMain() {
+        pairingFamily = null;
         root = new FrameLayout(this);
         root.setBackgroundColor(BG);
 
         LinearLayout content = new LinearLayout(this);
         content.setOrientation(LinearLayout.VERTICAL);
         content.addView(header(), match(dp(82)));
+        LinearLayout filters = new LinearLayout(this);
+        filters.setPadding(dp(18), 0, dp(18), dp(4));
+        directionButtons.clear();
+        String[] labels = {"全部", "派给我", "我派出"};
+        for (TaskRepository.Direction value : TaskRepository.Direction.values()) {
+            Button filter = new Button(this);
+            filter.setText(labels[value.ordinal()]);
+            filter.setTextSize(14);
+            filter.setMinHeight(0);
+            filter.setOnClickListener(view -> { direction = value; refreshList(); });
+            directionButtons.add(filter);
+            filters.addView(filter, weighted());
+        }
+        content.addView(filters, match(dp(44)));
 
         FrameLayout body = new FrameLayout(this);
         listView = new ListView(this);
@@ -285,21 +371,30 @@ public final class MainActivity extends Activity implements TaskAdapter.Listener
     private void refreshList() {
         if (adapter == null || !Profile.isComplete(this)) return;
         List<TaskItem> visible = TaskRepository.visible(TaskCache.load(this), Profile.familyId(this),
-                Profile.userId(this), archive);
+                Profile.userId(this), archive, direction);
+        for (int i = 0; i < directionButtons.size(); i++) {
+            Button filter = directionButtons.get(i);
+            boolean selected = i == direction.ordinal();
+            filter.setSelected(selected);
+            filter.setTextColor(selected ? PRIMARY : TEXT);
+            filter.setBackground(round(selected ? 0xFFDDE6FF : Color.TRANSPARENT, 8));
+        }
         adapter.setItems(visible);
         boolean empty = visible.isEmpty();
         emptyView.setVisibility(empty ? View.VISIBLE : View.GONE);
         listView.setVisibility(empty ? View.GONE : View.VISIBLE);
         emptyIcon.setImageResource(archive ? R.drawable.icon_empty_archive : R.drawable.icon_empty_inbox);
-        emptyTitle.setText(archive ? "归档里还没有记录" : "没有任务");
-        emptySubtitle.setText(archive ? "完成后的任务会收进这里" : "点击 + 按钮即可添加");
+        emptyTitle.setText(direction == TaskRepository.Direction.ALL ? (archive ? "归档里还没有记录" : "没有任务") : "这个筛选下没有任务");
+        emptySubtitle.setText(direction == TaskRepository.Direction.ALL ? (archive ? "完成后的任务会收进这里" : "点击 + 按钮即可添加") : "");
     }
 
     private void syncNow(boolean notify) {
+        String family = Profile.familyId(this);
         new Thread(() -> {
             try {
-                JSONArray tasks = relay.fetch(Profile.familyId(this), 0);
+                JSONArray tasks = relay.fetch(family, 0);
                 TaskCache.merge(this, tasks);
+                startForegroundService(new Intent(this, PollService.class));
                 runOnUiThread(() -> { refreshList(); if (notify) toast("已同步"); });
             } catch (Exception error) {
                 if (notify) runOnUiThread(() -> toast("同步失败：" + error.getMessage()));
@@ -563,24 +658,38 @@ public final class MainActivity extends Activity implements TaskAdapter.Listener
 
     private void createTask(String title, String detail, String transcript, long deadline,
                             List<PendingImage> images, AlertDialog dialog) {
+        String family = Profile.familyId(this), role = Profile.userId(this), peer = Profile.counterpart(this);
         new Thread(() -> {
             try {
                 TaskItem task = new TaskItem();
                 task.objectId = UUID.randomUUID().toString();
-                task.familyId = Profile.familyId(this);
-                task.fromUserId = Profile.userId(this);
-                task.toUserId = Profile.counterpart(this);
+                task.clientRequestId = task.objectId;
+                task.queued = true;
+                task.createdAt = System.currentTimeMillis();
+                task.familyId = family;
+                task.fromUserId = role;
+                task.toUserId = peer;
                 task.rawText = transcript.isEmpty() ? title : transcript;
                 task.title = title;
                 task.detail = detail;
                 task.deadline = deadline;
                 task.status = "pending";
                 for (PendingImage pending : images) {
-                    task.images.add(relay.upload(pending.bytes, task.familyId, pending.width, pending.height));
+                    TaskItem.TaskImage image = new TaskItem.TaskImage();
+                    image.id = "local-" + task.images.size();
+                    image.width = pending.width;
+                    image.height = pending.height;
+                    java.nio.file.Files.write(TaskOutbox.attachment(this, task, task.images.size()).toPath(), pending.bytes);
+                    task.images.add(image);
                 }
-                TaskItem created = relay.create(task);
-                TaskCache.upsert(this, created);
-                runOnUiThread(() -> { dialog.dismiss(); switchBoard(false); toast("已派出"); });
+                TaskCache.upsert(this, task);
+                runOnUiThread(() -> {
+                    dialog.dismiss();
+                    if (direction == TaskRepository.Direction.INCOMING) direction = TaskRepository.Direction.OUTGOING;
+                    switchBoard(false);
+                    startForegroundService(new Intent(this, PollService.class));
+                    toast("已加入待发送");
+                });
             } catch (Exception error) {
                 runOnUiThread(() -> {
                     if (dialog.isShowing() && voiceInput != null) voiceInput.updateControls();
@@ -622,6 +731,23 @@ public final class MainActivity extends Activity implements TaskAdapter.Listener
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
+        IntentResult scanned = IntentIntegrator.parseActivityResult(requestCode, resultCode, data);
+        if (scanned != null) {
+            String value = scanned.getContents();
+            if (value != null && pairingFamily != null) {
+                String[] fields = value.split(":", 5);
+                if (fields.length != 5 || !value.startsWith("paihuor:pair:1:") || !fields[3].matches("wife|husband")) {
+                    toast("这不是派活儿家庭二维码");
+                    return;
+                }
+                String family = Uri.decode(fields[4]).trim();
+                if (family.isEmpty() || family.length() > 120) { toast("家庭码无效"); return; }
+                pairingFamily.setText(family);
+                if (fields[3].equals("wife")) pairingWife.setChecked(true); else pairingHusband.setChecked(true);
+                toast("请核对家庭码和身份后保存");
+            }
+            return;
+        }
         if (requestCode != PICK_IMAGES || resultCode != RESULT_OK || data == null) return;
         List<Uri> uris = new ArrayList<>();
         if (data.getClipData() != null) {
@@ -665,7 +791,13 @@ public final class MainActivity extends Activity implements TaskAdapter.Listener
         }
     }
 
-    @Override public void onOpen(TaskItem item) { showTaskDetail(item); }
+    @Override public void onOpen(TaskItem item) {
+        if (item.queued) {
+            new AlertDialog.Builder(this).setTitle("待发送").setMessage(item.title)
+                    .setPositiveButton("立即重试", (dialog, which) -> startForegroundService(new Intent(this, PollService.class)))
+                    .setNegativeButton("关闭", null).show();
+        } else showTaskDetail(item);
+    }
 
     @Override
     public void onCheck(TaskItem item) {
@@ -678,6 +810,7 @@ public final class MainActivity extends Activity implements TaskAdapter.Listener
 
     @Override
     public void onMore(TaskItem item, View anchor) {
+        if (item.queued) { onOpen(item); return; }
         PopupMenu menu = new PopupMenu(this, anchor);
         if (!item.archived && !"done".equals(item.status)) menu.getMenu().add("商量");
         menu.getMenu().add(item.archived ? "取消归档" : "归档");

@@ -81,6 +81,31 @@ export class TaskStore {
     await this.persist();
   }
 
+  async queue(task: TaskItem): Promise<void> {
+    this.tasks.push(task);
+    try {
+      await this.persist(true);
+    } catch (err) {
+      this.tasks = this.tasks.filter((t: TaskItem) => t.id !== task.id);
+      throw new Error('Cannot persist queued task');
+    }
+  }
+
+  async finishSending(pending: TaskItem, sent: TaskItem): Promise<void> {
+    const previous = this.tasks.slice();
+    const current = this.tasks.find((t: TaskItem) => t.objectId === sent.objectId && t.updatedAt > sent.updatedAt);
+    const latest = current ?? sent;
+    latest.id = pending.id;
+    this.tasks = this.tasks.filter((t: TaskItem) => t.id !== pending.id && t.objectId !== sent.objectId);
+    this.tasks.push(latest);
+    try {
+      await this.persist(true);
+    } catch (err) {
+      this.tasks = previous;
+      throw new Error('Cannot save sent task');
+    }
+  }
+
   async remove(id: string): Promise<void> {
     this.tasks = this.tasks.filter((t: TaskItem) => t.id !== id);
     await this.persist();
@@ -97,6 +122,7 @@ export class TaskStore {
       }
       this.fixTask(s);
       const idx = this.tasks.findIndex((t: TaskItem) => t.objectId === s.objectId);
+      if (idx >= 0 && this.tasks[idx].updatedAt > s.updatedAt) continue;
       // 远端软删：本地移除，并回收其提醒 id 交调用方撤销
       if (s.deleted === true) {
         if (idx >= 0) {
@@ -128,7 +154,7 @@ export class TaskStore {
         this.tasks.push(s);
       }
     }
-    await this.persist();
+    await this.persist(true);
     return orphanReminders;
   }
 
@@ -169,8 +195,9 @@ export class TaskStore {
     }
   }
 
-  private async persist(): Promise<void> {
+  private async persist(required: boolean = false): Promise<void> {
     if (!this.store) {
+      if (required) throw new Error('Task storage not available');
       return;
     }
     try {
@@ -178,6 +205,7 @@ export class TaskStore {
       await this.store.flush();
     } catch (err) {
       hilog.error(0x0000, TAG, 'persist failed: ' + JSON.stringify(err));
+      if (required) throw new Error('Cannot persist tasks');
     }
   }
 }

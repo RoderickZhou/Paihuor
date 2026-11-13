@@ -17,7 +17,7 @@ const { DatabaseSync } = require('node:sqlite');
 
 const PORT = process.env.PORT || 8787;
 const SECRET = process.env.PAIHUOR_KEY || 'CHANGE_ME';
-const DIR = __dirname;
+const DIR = process.env.PAIHUOR_DATA_DIR || __dirname;
 const DB_FILE = path.join(DIR, 'paihuor.db');
 const LEGACY_TASKS = path.join(DIR, 'tasks.json');
 const LEGACY_DEVICES = path.join(DIR, 'devices.json');
@@ -67,10 +67,20 @@ db.exec(`
     updatedAt  INTEGER DEFAULT 0
   );
   CREATE INDEX IF NOT EXISTS idx_family_updated ON tasks(familyId, updatedAt);
+  CREATE INDEX IF NOT EXISTS idx_task_updated ON tasks(updatedAt);
   CREATE TABLE IF NOT EXISTS devices (
     familyId TEXT, userId TEXT, platform TEXT, pushToken TEXT, updatedAt INTEGER,
     PRIMARY KEY (familyId, userId, platform)
   );
+  CREATE TABLE IF NOT EXISTS task_creates (
+    familyId TEXT NOT NULL, fromUserId TEXT NOT NULL, requestId TEXT NOT NULL, objectId TEXT NOT NULL,
+    PRIMARY KEY (familyId, fromUserId, requestId)
+  );
+  CREATE TABLE IF NOT EXISTS profile_presence (
+    deviceId TEXT PRIMARY KEY, familyId TEXT NOT NULL, userId TEXT NOT NULL,
+    platform TEXT NOT NULL, syncedAt INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_profile_presence ON profile_presence(familyId, userId);
   CREATE TABLE IF NOT EXISTS attachments (
     id        TEXT PRIMARY KEY,
     familyId  TEXT DEFAULT '',
@@ -84,7 +94,7 @@ db.exec(`
 `);
 
 // 旧库补列(幂等; 列已存在则 ALTER 抛错被忽略)。对齐 iOS 契约的审计字段。
-["archivedAt INTEGER DEFAULT 0", "archivedBy TEXT DEFAULT ''", "deletedAt INTEGER DEFAULT 0", "deletedBy TEXT DEFAULT ''", "images TEXT DEFAULT '[]'"].forEach((col) => {
+["archivedAt INTEGER DEFAULT 0", "archivedBy TEXT DEFAULT ''", "deletedAt INTEGER DEFAULT 0", "deletedBy TEXT DEFAULT ''", "images TEXT DEFAULT '[]'", "recipientSyncedAt INTEGER DEFAULT 0"].forEach((col) => {
   try { db.exec('ALTER TABLE tasks ADD COLUMN ' + col); } catch (e) {}
 });
 
@@ -127,9 +137,18 @@ function rowToTask(r) {
     archived: !!r.archived, deleted: !!r.deleted,
     archivedAt: r.archivedAt || 0, archivedBy: r.archivedBy || '',
     deletedAt: r.deletedAt || 0, deletedBy: r.deletedBy || '',
-    receivedAt: r.receivedAt, doneAt: r.doneAt,
+    receivedAt: r.receivedAt, doneAt: r.doneAt, recipientSyncedAt: r.recipientSyncedAt || 0,
     createdAt: r.createdAt, updatedAt: r.updatedAt
   };
+}
+
+const isRole = value => value === 'wife' || value === 'husband';
+const isFamily = value => typeof value === 'string' && value.trim() === value && value.length > 0 && value.length <= 120;
+const isUuid = value => typeof value === 'string' && /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(value);
+
+function nextTaskTime() {
+  const latest = db.prepare('SELECT updatedAt FROM tasks ORDER BY updatedAt DESC LIMIT 1').get();
+  return Math.max(Date.now(), (latest?.updatedAt || 0) + 1);
 }
 
 function getTask(objectId) {
@@ -193,7 +212,7 @@ function patchTask(objectId, patch) {
       sets.push(`${k}=?`); vals.push(v);
     }
   }
-  const now = Date.now();
+  const now = nextTaskTime();
   sets.push('updatedAt=?'); vals.push(now);
   vals.push(objectId);
   db.prepare(`UPDATE tasks SET ${sets.join(',')} WHERE objectId=?`).run(...vals);
@@ -541,14 +560,66 @@ const server = http.createServer(async (req, res) => {
 
   if (req.method === 'POST' && url.pathname === '/tasks') {
     const t = await readBody(req);
-    const now = Date.now();
+    const requestId = t.clientRequestId;
+    if (requestId !== undefined) {
+      if (!isUuid(requestId) || !isFamily(t.familyId) || !isRole(t.fromUserId) || !isRole(t.toUserId) || t.fromUserId === t.toUserId) {
+        return send(res, 400, { error: 'invalid task identity' });
+      }
+      const prior = db.prepare('SELECT objectId FROM task_creates WHERE familyId=? AND fromUserId=? AND requestId=?')
+        .get(t.familyId, t.fromUserId, requestId);
+      if (prior) {
+        const task = getTask(prior.objectId);
+        return task ? send(res, 200, task) : send(res, 410, { error: 'task no longer exists' });
+      }
+    }
+    const now = nextTaskTime();
     t.objectId = crypto.randomUUID();
     t.createdAt = now; t.updatedAt = now;
     if (t.archived === undefined) t.archived = false;
-    insertTask(t);
+    db.exec('BEGIN');
+    try {
+      insertTask(t);
+      if (requestId) db.prepare('INSERT INTO task_creates VALUES (?,?,?,?)').run(t.familyId, t.fromUserId, requestId, t.objectId);
+      db.exec('COMMIT');
+    } catch (error) {
+      db.exec('ROLLBACK');
+      throw error;
+    }
     const saved = getTask(t.objectId);
     notifyRecipient(saved); // 不阻塞
     return send(res, 200, saved);
+  }
+
+  if (req.method === 'POST' && url.pathname === '/sync/ack') {
+    const b = await readBody(req);
+    if (!isFamily(b.familyId) || !isRole(b.userId) || !isUuid(b.deviceId) ||
+        !['android', 'harmony', 'ios'].includes(b.platform) || !Array.isArray(b.objectIds) || b.objectIds.length > 100 ||
+        !b.objectIds.every(isUuid)) return send(res, 400, { error: 'invalid sync acknowledgment' });
+    const now = Date.now();
+    const mark = db.prepare('UPDATE tasks SET recipientSyncedAt=?, updatedAt=? WHERE objectId=? AND familyId=? AND toUserId=? AND deleted=0 AND recipientSyncedAt=0');
+    db.exec('BEGIN');
+    try {
+      db.prepare('INSERT OR REPLACE INTO profile_presence VALUES (?,?,?,?,?)').run(b.deviceId, b.familyId, b.userId, b.platform, now);
+      let changed = 0;
+      let time = nextTaskTime();
+      for (const id of b.objectIds) changed += mark.run(now, time++, id, b.familyId, b.userId).changes;
+      db.exec('COMMIT');
+      return send(res, 200, { ok: true, changed, syncedAt: now });
+    } catch (error) {
+      db.exec('ROLLBACK');
+      throw error;
+    }
+  }
+
+  if (req.method === 'GET' && url.pathname === '/sync/status') {
+    const family = url.searchParams.get('familyId');
+    const user = url.searchParams.get('userId');
+    if (!isFamily(family) || !isRole(user)) return send(res, 400, { error: 'invalid profile' });
+    const peer = user === 'wife' ? 'husband' : 'wife';
+    const last = db.prepare('SELECT MAX(syncedAt) t FROM profile_presence WHERE familyId=? AND userId=?');
+    const push = db.prepare("SELECT 1 FROM devices WHERE familyId=? AND userId=? AND platform='harmony' AND length(pushToken)>0");
+    return send(res, 200, { selfSyncedAt: last.get(family, user).t || 0, peerSyncedAt: last.get(family, peer).t || 0,
+      selfPushRegistered: !!push.get(family, user), peerPushRegistered: !!push.get(family, peer) });
   }
 
   if (req.method === 'POST' && url.pathname.startsWith('/tasks/')) {
@@ -661,7 +732,7 @@ const server = http.createServer(async (req, res) => {
  }
 });
 process.on('unhandledRejection', (e) => console.log('unhandledRejection:', e && (e.message || e)));
-server.listen(PORT, () => console.log('Paihuor relay (sqlite) on :' + PORT));
+server.listen(Number(PORT), () => console.log('Paihuor relay (sqlite) on :' + server.address().port));
 
 // ---------------- Admin page (single file, vanilla JS) ----------------
 const ADMIN_HTML = `<!doctype html><html lang="zh"><head><meta charset="utf-8">

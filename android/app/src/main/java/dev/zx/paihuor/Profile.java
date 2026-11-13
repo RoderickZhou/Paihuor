@@ -33,6 +33,14 @@ public final class Profile {
         return "wife".equals(userId(context)) ? "husband" : "wife";
     }
 
+    public static synchronized String deviceId(Context context) {
+        String current = preferences(context).getString("deviceId", "");
+        if (!current.isEmpty()) return current;
+        String id = java.util.UUID.randomUUID().toString();
+        preferences(context).edit().putString("deviceId", id).apply();
+        return id;
+    }
+
     public static void save(Context context, String familyId, String userId, String userName) {
         preferences(context).edit()
                 .putString("familyId", familyId.trim())

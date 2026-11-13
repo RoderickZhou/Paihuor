@@ -18,6 +18,9 @@ public final class TaskItem {
     public boolean archived;
     public boolean deleted;
     public long receivedAt;
+    public long recipientSyncedAt;
+    public String clientRequestId = "";
+    public boolean queued;
     public long doneAt;
     public final List<Negotiation> negotiation = new ArrayList<>();
     public final List<TaskImage> images = new ArrayList<>();

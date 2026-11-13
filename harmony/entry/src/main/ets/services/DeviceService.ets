@@ -38,12 +38,15 @@ export class DeviceService {
   }
 
   async ensureRegisteredToken(force: boolean = false): Promise<boolean> {
+    const profile = ProfileService.getInstance().getProfile();
+    if (!profile) return false;
+    const profileKey = profile.familyId + ':' + profile.userId;
     const now = Date.now();
     if (this.inFlight) {
       return false;
     }
     if (!force) {
-      if (this.registeredToken.length > 0 && now - this.lastAttemptAt < DeviceService.REFRESH_GAP_MS) {
+      if (this.registeredProfileKey === profileKey && this.registeredToken.length > 0 && now - this.lastAttemptAt < DeviceService.REFRESH_GAP_MS) {
         return true;
       }
       if (this.registeredToken.length === 0 && now - this.lastAttemptAt < DeviceService.RETRY_GAP_MS) {
@@ -60,11 +63,8 @@ export class DeviceService {
         return false;
       }
       hilog.info(0x0000, TAG, 'pushToken length=' + token.length);
-      const profile = ProfileService.getInstance().getProfile();
-      if (!profile) {
-        return false;
-      }
-      const profileKey = profile.familyId + ':' + profile.userId;
+      const current = ProfileService.getInstance().getProfile();
+      if (current?.familyId !== profile.familyId || current?.userId !== profile.userId) return false;
       if (!force && token === this.registeredToken && profileKey === this.registeredProfileKey) {
         return true;
       }
